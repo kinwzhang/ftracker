@@ -48,6 +48,13 @@ body {
 .gantt-bar.overdue { background: linear-gradient(135deg, #ef4444, #f87171); box-shadow: 0 2px 6px rgba(239,68,68,0.3); }
 .gantt-bar.group { height: 14px; top: 5px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
 .gantt-row { display: flex; align-items: center; margin-bottom: 3px; }
+.gantt-row.gantt-group-summary { background: rgba(99,102,241,0.06); border-radius: 6px; cursor: pointer; padding: 2px 0; margin-bottom: 4px; }
+.gantt-row.gantt-group-summary > .gantt-label { font-weight: 600; color: #1a1a2e; }
+details.gantt-group-block[open] > summary.gantt-row.gantt-group-summary .gantt-group-chevron::before { content: '▾'; }
+details.gantt-group-block:not([open]) > summary.gantt-row.gantt-group-summary { opacity: 0.95; }
+details.gantt-group-block:not([open]) > summary.gantt-row.gantt-group-summary .gantt-group-chevron::before { content: '▸'; }
+.gantt-group-chevron { display: inline-block; width: 1em; font-size: 0.85rem; margin-right: 4px; }
+.gantt-bar.group { opacity: 0.85; }
 .gantt-label { width: 200px; flex-shrink: 0; font-size: 0.82rem; font-weight: 500; color: #1a1a2e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
 .gantt-track { position: relative; height: 24px; background: rgba(0,0,0,0.04); border-radius: 6px; }
 .day-header { display: flex; }
@@ -68,6 +75,12 @@ table { margin-bottom: 0; }
 .row-completed { background: rgba(16,185,129,0.08) !important; }
 .row-pending { background: rgba(245,158,11,0.08) !important; }
 .row-overdue { background: rgba(239,68,68,0.08) !important; }
+.group-summary-row { cursor: pointer; font-weight: 600; background: rgba(99,102,241,0.08); border-top: 1px solid rgba(0,0,0,0.06); }
+.group-summary-row.status-completed { background: rgba(16,185,129,0.12); }
+.group-summary-row.status-overdue { background: rgba(239,68,68,0.12); }
+.group-summary-row.status-pending { background: rgba(245,158,11,0.12); }
+.group-summary-row:hover { filter: brightness(0.97); }
+.group-summary-row td { padding: 10px 12px; }
 .inline-comment { border: none; background: transparent; width: 100%; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 0.85rem; transition: background 0.15s; }
 .inline-comment:focus { background: rgba(255,255,255,0.7); border: 1px solid rgba(99,102,241,0.3); outline: none; cursor: text; }
 .btn-sm { border-radius: 8px; font-weight: 500; }

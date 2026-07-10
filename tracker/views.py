@@ -28,14 +28,111 @@ def _get_current_month(request):
     return date(today.year, today.month, 1)
 
 
+def _gantt_bar_for_task(task, month, pixel_per_day):
+    """Compute pixel left/width for an individual task bar in the Gantt chart."""
+    start = task.month
+    end = task.scheduled_date if task.scheduled_date >= start else start
+    duration = (end - start).days + 1
+    offset = (start - month).days
+    if offset < 0:
+        offset = 0
+    return {
+        "task": task,
+        "start_offset": offset * pixel_per_day + 4,
+        "duration": duration * pixel_per_day - 4,
+    }
+
+
+def _build_group_block(group, tasks_in_group, today, month, pixel_per_day):
+    """Build the render context for a single group's collapsible block.
+
+    `group` is a `Group` instance, or None for the synthetic ungrouped bucket.
+    Returns a dict with: id, group, tasks, gantt_tasks, summary, group_bar.
+    """
+    unfinished = sorted(
+        [t for t in tasks_in_group if not t.finished],
+        key=lambda t: t.scheduled_date,
+    )
+    finished = sorted(
+        [t for t in tasks_in_group if t.finished],
+        key=lambda t: t.completion_date or t.scheduled_date,
+    )
+    ordered_tasks = unfinished + finished
+
+    gantt_tasks = [
+        _gantt_bar_for_task(t, month, pixel_per_day) for t in ordered_tasks
+    ]
+
+    total_count = len(tasks_in_group)
+    completed_count = sum(1 for t in tasks_in_group if t.finished)
+
+    if total_count == 0:
+        group_bar = None
+        status = "pending"
+    else:
+        scheduled_dates = [t.scheduled_date for t in tasks_in_group]
+        earliest = min(scheduled_dates)
+        latest = max(scheduled_dates)
+        all_completed = completed_count == total_count
+        any_overdue = any(
+            not t.finished and t.scheduled_date < today for t in tasks_in_group
+        )
+
+        # E2.1: bar end = next closest upcoming due date; fallback to
+        # latest scheduled_date when everything is past-due, or latest
+        # completion_date when all are completed.
+        upcoming_due = sorted(
+            t.scheduled_date
+            for t in tasks_in_group
+            if not t.finished and t.scheduled_date >= today
+        )
+        if upcoming_due:
+            bar_end = upcoming_due[0]
+        elif all_completed:
+            comp_dates = [
+                t.completion_date for t in tasks_in_group if t.completion_date
+            ]
+            bar_end = max(comp_dates) if comp_dates else latest
+        else:
+            bar_end = latest
+
+        if all_completed:
+            status = "completed"
+        elif any_overdue:
+            status = "overdue"
+        else:
+            status = "pending"
+
+        start_offset = max((earliest - month).days, 0) * pixel_per_day + 4
+        width = max(((bar_end - earliest).days + 1) * pixel_per_day - 4, 4)
+        group_bar = {
+            "start_offset": start_offset,
+            "width": width,
+            "status": status,
+        }
+
+    # Use the group's real id, or 0 for the ungrouped bucket. The id is used
+    # by the template to wire up expand/collapse sync between Gantt and table.
+    block_id = group.id if group is not None else 0
+    return {
+        "id": block_id,
+        "group": group,
+        "tasks": ordered_tasks,
+        "gantt_tasks": gantt_tasks,
+        "summary": {
+            "total": total_count,
+            "completed": completed_count,
+            "status": status,
+        },
+        "group_bar": group_bar,
+    }
+
+
 def task_list(request):
     month = _get_current_month(request)
-    tasks_raw = Task.objects.filter(month=month)
-    unfinished = [t for t in tasks_raw if not t.finished]
-    finished = [t for t in tasks_raw if t.finished]
-    unfinished.sort(key=lambda t: t.scheduled_date)
-    finished.sort(key=lambda t: t.completion_date or t.scheduled_date)
-    tasks = unfinished + finished
+    tasks_raw = list(
+        Task.objects.filter(month=month).select_related("group")
+    )
     templates = TaskTemplate.objects.all()
     weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     today = timezone.localdate()
@@ -50,7 +147,6 @@ def task_list(request):
         d = date(month.year, month.month, day)
         days_in_month.append({"date": d, "weekday": weekdays[d.weekday()]})
 
-    gantt_tasks = []
     pixel_per_day = 28
     canvas_width = total_days * pixel_per_day
     canvas_total_width = 200 + canvas_width
@@ -58,41 +154,71 @@ def task_list(request):
     if month <= today <= date(month.year, month.month, total_days):
         today_offset = (today - month).days * pixel_per_day
 
-    for task in tasks:
-        start = task.month
-        end = task.scheduled_date if task.scheduled_date >= start else start
-        duration = (end - start).days + 1
-        offset = (start - month).days
-        if offset < 0:
-            offset = 0
-        gantt_tasks.append({
-            "task": task,
-            "start_offset": offset * pixel_per_day + 4,
-            "duration": duration * pixel_per_day - 4,
-        })
+    # Group tasks. Tasks with group_id=None share a synthetic "Ungrouped" block
+    # which is rendered last so real groups lead.
+    grouped: dict[int, list] = {}
+    for t in tasks_raw:
+        grouped.setdefault(t.group_id, []).append(t)
+    groups_by_id = {g.id: g for g in Group.objects.all()}
 
-    total = len(tasks)
-    completed = sum(1 for t in tasks if t.finished)
-    pending = sum(1 for t in tasks if not t.finished)
-    overdue = sum(1 for t in tasks if not t.finished and t.scheduled_date < today)
+    group_blocks = []
+    # Real groups first, ordered by (Group.sort_order, name).
+    for gid, gtasks in sorted(
+        grouped.items(),
+        key=lambda kv: (
+            1 if kv[0] is None else 0,
+            groups_by_id[kv[0]].sort_order if kv[0] is not None else 0,
+            groups_by_id[kv[0]].name if kv[0] is not None else "",
+        ),
+    ):
+        if gid is None:
+            continue
+        group_blocks.append(
+            _build_group_block(
+                groups_by_id[gid], gtasks, today, month, pixel_per_day
+            )
+        )
 
-    return render(request, "tracker/task_list.html", {
-        "tasks": tasks,
-        "templates": templates,
-        "month": month,
-        "months": list(range(1, 13)),
-        "days_in_month": days_in_month,
-        "gantt_tasks": gantt_tasks,
-        "canvas_width": canvas_width,
-        "canvas_total_width": canvas_total_width,
-        "total_days": total_days,
-        "today": today,
-        "today_offset": today_offset,
-        "total_count": total,
-        "completed_count": completed,
-        "pending_count": pending,
-        "overdue_count": overdue,
-    })
+    # Synthetic ungrouped block (only if there are ungrouped tasks).
+    if None in grouped:
+        group_blocks.append(
+            _build_group_block(None, grouped[None], today, month, pixel_per_day)
+        )
+
+    total = len(tasks_raw)
+    completed = sum(1 for t in tasks_raw if t.finished)
+    pending = sum(1 for t in tasks_raw if not t.finished)
+    overdue = sum(
+        1 for t in tasks_raw if not t.finished and t.scheduled_date < today
+    )
+
+    # Flat list of every task, in the same order they appear across blocks.
+    # Useful for templates that want to iterate all rows regardless of group.
+    all_tasks = []
+    for block in group_blocks:
+        all_tasks.extend(block["tasks"])
+
+    return render(
+        request,
+        "tracker/task_list.html",
+        {
+            "tasks": all_tasks,
+            "templates": templates,
+            "month": month,
+            "months": list(range(1, 13)),
+            "days_in_month": days_in_month,
+            "group_blocks": group_blocks,
+            "canvas_width": canvas_width,
+            "canvas_total_width": canvas_total_width,
+            "total_days": total_days,
+            "today": today,
+            "today_offset": today_offset,
+            "total_count": total,
+            "completed_count": completed,
+            "pending_count": pending,
+            "overdue_count": overdue,
+        },
+    )
 
 
 # --- Inline toggle finished (E3, E4) ---

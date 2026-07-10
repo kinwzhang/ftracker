@@ -61,7 +61,13 @@
 
 {% if tasks %}
 <div class="glass-card mb-4">
-    <div class="card-header">Gantt Chart</div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Gantt Chart</span>
+        <span class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary js-expand-all">Expand all</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-collapse-all">Collapse all</button>
+        </span>
+    </div>
     <div class="card-body gantt-chart">
         <div class="gantt-canvas" style="width: {{ canvas_total_width }}px;">
             <div class="day-header" style="margin-left: 200px; width: {{ canvas_width }}px;">
@@ -75,15 +81,33 @@
                 {% if today_offset is not None %}
                 <div class="today-line" style="left: {{ today_offset|add:200 }}px;"></div>
                 {% endif %}
-                {% for gt in gantt_tasks %}
-                <div class="gantt-row">
-                    <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
-                    <div class="gantt-track" style="width: {{ canvas_width }}px;">
-                        <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
-                             style="left: {{ gt.start_offset }}px; width: {{ gt.duration }}px;"
-                             title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
+                {% for block in group_blocks %}
+                <details class="gantt-group-block" data-group-id="{{ block.id }}" open>
+                    <summary class="gantt-row gantt-group-summary">
+                        <div class="gantt-label">
+                            <span class="gantt-group-chevron"></span>
+                            <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
+                            <span class="badge bg-secondary ms-1">{{ block.summary.completed }}/{{ block.summary.total }}</span>
+                        </div>
+                        <div class="gantt-track" style="width: {{ canvas_width }}px;">
+                            {% if block.group_bar %}
+                            <div class="gantt-bar group {{ block.group_bar.status }}"
+                                 style="left: {{ block.group_bar.start_offset }}px; width: {{ block.group_bar.width }}px;"
+                                 title="Group: {{ block.group.name|default:'Ungrouped' }} ({{ block.group_bar.status }})"></div>
+                            {% endif %}
+                        </div>
+                    </summary>
+                    {% for gt in block.gantt_tasks %}
+                    <div class="gantt-row">
+                        <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
+                        <div class="gantt-track" style="width: {{ canvas_width }}px;">
+                            <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
+                                 style="left: {{ gt.start_offset }}px; width: {{ gt.duration }}px;"
+                                 title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
+                        </div>
                     </div>
-                </div>
+                    {% endfor %}
+                </details>
                 {% endfor %}
             </div>
         </div>
@@ -111,9 +135,17 @@
                 </tr>
             </thead>
             <tbody>
-                {% for task in tasks %}
+                {% for block in group_blocks %}
+                <tr class="group-summary-row table-group-summary status-{{ block.summary.status }}" data-group-id="{{ block.id }}">
+                    <td colspan="8">
+                        <span class="gantt-group-chevron"></span>
+                        <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
+                        <span class="badge bg-secondary ms-1">{{ block.summary.completed }}/{{ block.summary.total }} done</span>
+                    </td>
+                </tr>
+                {% for task in block.tasks %}
                 {% with st=task.sla_type %}
-                <tr id="task-row-{{ task.id }}" class="{% if task.finished %}row-completed{% elif task.scheduled_date < today %}row-overdue{% else %}row-pending{% endif %}">
+                <tr id="task-row-{{ task.id }}" data-group-id="{{ block.id }}" data-group-row class="{% if task.finished %}row-completed{% elif task.scheduled_date < today %}row-overdue{% else %}row-pending{% endif %}">
                     <td>
                         <input type="checkbox" class="form-check-input toggle-finished" data-task-id="{{ task.id }}" {% if task.finished %}checked{% endif %}>
                     </td>
@@ -163,6 +195,7 @@
                     </td>
                 </tr>
                 {% endwith %}
+                {% endfor %}
                 {% endfor %}
             </tbody>
         </table>
@@ -381,6 +414,60 @@ function stepMonth(btn, delta) {
             else if (e.key === 'Escape') { e.preventDefault(); cancelCommentEdit(cell); }
         });
         input.addEventListener('blur', function() { saveCommentEdit(cell); });
+    });
+
+    // --- Group expand/collapse: keep Gantt <details> and table <tr>s in sync ---
+    function setGroupExpanded(groupId, expanded) {
+        // Gantt side
+        var det = document.querySelector('details.gantt-group-block[data-group-id="' + groupId + '"]');
+        if (det) det.open = expanded;
+        // Table side
+        var summary = document.querySelector('tr.table-group-summary[data-group-id="' + groupId + '"]');
+        if (summary) {
+            summary.classList.toggle('collapsed', !expanded);
+        }
+        var rows = document.querySelectorAll('tr[data-group-row][data-group-id="' + groupId + '"]');
+        rows.forEach(function(r) { r.style.display = expanded ? '' : 'none'; });
+    }
+
+    // Initial state: respect whatever server rendered.
+    document.querySelectorAll('tr.table-group-summary').forEach(function(summary) {
+        var gid = summary.dataset.groupId;
+        var det = document.querySelector('details.gantt-group-block[data-group-id="' + gid + '"]');
+        var open = det ? det.open : true;
+        setGroupExpanded(gid, open);
+    });
+
+    // Clicking a table group row toggles the group.
+    document.querySelectorAll('tr.table-group-summary').forEach(function(summary) {
+        summary.addEventListener('click', function() {
+            var gid = this.dataset.groupId;
+            var det = document.querySelector('details.gantt-group-block[data-group-id="' + gid + '"]');
+            var nowOpen = !(det && det.open);
+            setGroupExpanded(gid, nowOpen);
+        });
+    });
+
+    // Native <details> toggle on the Gantt side: sync the table.
+    document.querySelectorAll('details.gantt-group-block').forEach(function(det) {
+        det.addEventListener('toggle', function() {
+            var gid = this.dataset.groupId;
+            setGroupExpanded(gid, this.open);
+        });
+    });
+
+    // Expand all / Collapse all.
+    document.querySelectorAll('.js-expand-all').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('details.gantt-group-block').forEach(function(d) { d.open = true; });
+            document.querySelectorAll('tr.table-group-summary').forEach(function(s) { setGroupExpanded(s.dataset.groupId, true); });
+        });
+    });
+    document.querySelectorAll('.js-collapse-all').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('details.gantt-group-block').forEach(function(d) { d.open = false; });
+            document.querySelectorAll('tr.table-group-summary').forEach(function(s) { setGroupExpanded(s.dataset.groupId, false); });
+        });
     });
 })();
 </script>
