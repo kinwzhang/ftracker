@@ -41,13 +41,24 @@ def runserver(address: str) -> None:
 def main() -> int:
     address = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:8000"
 
-    print(f"== ftracker trigger — booting at http://{address}/ ==")
-    bootstrap()
+    # Django's StatReloader re-execs ``sys.argv`` on startup so the child can
+    # actually run the dev server with autoreload enabled. That second exec
+    # would otherwise print the entire bootstrap banner again and re-run the
+    # bootstrap (harmless but noisy). Detect the re-exec and skip both.
+    # The env var Django sets is ``RUN_MAIN=true`` (see
+    # ``django.utils.autoreload.DJANGO_AUTORELOAD_ENV``).
+    is_autoreload_re_exec = os.environ.get("RUN_MAIN") == "true"
 
-    print("")
-    print(f"Starting development server at http://{address}/")
-    print("Quit the server with CTRL-C.")
-    print("")
+    if not is_autoreload_re_exec:
+        print(f"== ftracker trigger — booting at http://{address}/ ==")
+        bootstrap()
+
+        print("")
+        print(f"Starting development server at http://{address}/")
+        print("Quit the server with CTRL-C.")
+        print("")
+    else:
+        print(f"== ftracker trigger — reloading at http://{address}/ ==")
 
     os.chdir(PROJECT_ROOT)
     runserver(address)

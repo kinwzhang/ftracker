@@ -1,7 +1,8 @@
 import csv
 import io
 import json
-from datetime import date, timedelta
+from calendar import monthrange
+from datetime import date, time, timedelta
 
 from django.contrib import messages
 from django.db import transaction
@@ -28,26 +29,42 @@ def _get_current_month(request):
     return date(today.year, today.month, 1)
 
 
-def _gantt_bar_for_task(task, month, pixel_per_day):
-    """Compute pixel left/width for an individual task bar in the Gantt chart."""
+def _gantt_bar_for_task(task, month, pixel_per_day, total_days):
+    """Compute percentage left/width for an individual task bar in the Gantt chart."""
     start = task.month
     end = task.scheduled_date if task.scheduled_date >= start else start
-    duration = (end - start).days + 1
-    offset = (start - month).days
-    if offset < 0:
-        offset = 0
+    duration_days = (end - start).days + 1
+    offset_days = (start - month).days
+    if offset_days < 0:
+        offset_days = 0
+    left_pct = (offset_days + 0.15) / total_days * 100
+    width_pct = max((duration_days - 0.3) / total_days * 100, 1.0)
     return {
         "task": task,
-        "start_offset": offset * pixel_per_day + 4,
-        "duration": duration * pixel_per_day - 4,
+        "start_offset": left_pct,
+        "duration": width_pct,
     }
 
 
-def _build_group_block(group, tasks_in_group, today, month, pixel_per_day):
+def _build_group_block(group, tasks_in_group, today, month, pixel_per_day, total_days):
     """Build the render context for a single group's collapsible block.
 
     `group` is a `Group` instance, or None for the synthetic ungrouped bucket.
     Returns a dict with: id, group, tasks, gantt_tasks, summary, group_bar.
+
+    The single ``group_bar`` is rendered on the group summary row. Per E5 +
+    B7 (Round 5):
+      * Color follows the dominant status with the priority
+        ``overdue > pending > completed`` (matches task-list row tints).
+      * Counts overlay ("x overdue [Heavy Red], y pending/in progress [Heavy
+        Blue], z completed [Heavy Green]") live in ``summary`` so the
+        template can render the text inside the bar.
+      * Span: month start → latest ``scheduled_date`` across **all** tasks
+        in the group (finished or not). B7 made this the rule so the
+        group's bar length always reflects the longest task, regardless
+        of whether that task was completed early. Clamped to the month
+        end so the bar never paints past the visible canvas.
+      * Empty group → no bar (status still ``pending`` for layout).
     """
     unfinished = sorted(
         [t for t in tasks_in_group if not t.finished],
@@ -60,54 +77,49 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day):
     ordered_tasks = unfinished + finished
 
     gantt_tasks = [
-        _gantt_bar_for_task(t, month, pixel_per_day) for t in ordered_tasks
+        _gantt_bar_for_task(t, month, pixel_per_day, total_days) for t in ordered_tasks
     ]
 
     total_count = len(tasks_in_group)
+    overdue_count = sum(
+        1 for t in tasks_in_group if not t.finished and t.scheduled_date < today
+    )
+    pending_count = sum(
+        1 for t in tasks_in_group if not t.finished and t.scheduled_date >= today
+    )
     completed_count = sum(1 for t in tasks_in_group if t.finished)
+
+    # Dominant status priority: overdue > pending > completed. Mirrors the
+    # status priority used elsewhere (E2.1) and the task-list row tints.
+    if total_count == 0:
+        status = "pending"
+    elif overdue_count > 0:
+        status = "overdue"
+    elif pending_count > 0:
+        status = "pending"
+    else:
+        status = "completed"
 
     if total_count == 0:
         group_bar = None
-        status = "pending"
     else:
-        scheduled_dates = [t.scheduled_date for t in tasks_in_group]
-        earliest = min(scheduled_dates)
-        latest = max(scheduled_dates)
-        all_completed = completed_count == total_count
-        any_overdue = any(
-            not t.finished and t.scheduled_date < today for t in tasks_in_group
-        )
+        # B7: bar length always tracks the longest task in the group, no
+        # matter its completion status. scheduled_date is what defines a
+        # task's footprint on the Gantt canvas (its bar always starts at
+        # day 1 of the month), so we use it instead of completion_date.
+        bar_end = max(t.scheduled_date for t in tasks_in_group)
+        # Clamp bar_end so we never paint past the end of the displayed month.
+        last_day = month.replace(day=monthrange(month.year, month.month)[1])
+        if bar_end > last_day:
+            bar_end = last_day
 
-        # E2.1: bar end = next closest upcoming due date; fallback to
-        # latest scheduled_date when everything is past-due, or latest
-        # completion_date when all are completed.
-        upcoming_due = sorted(
-            t.scheduled_date
-            for t in tasks_in_group
-            if not t.finished and t.scheduled_date >= today
-        )
-        if upcoming_due:
-            bar_end = upcoming_due[0]
-        elif all_completed:
-            comp_dates = [
-                t.completion_date for t in tasks_in_group if t.completion_date
-            ]
-            bar_end = max(comp_dates) if comp_dates else latest
-        else:
-            bar_end = latest
-
-        if all_completed:
-            status = "completed"
-        elif any_overdue:
-            status = "overdue"
-        else:
-            status = "pending"
-
-        start_offset = max((earliest - month).days, 0) * pixel_per_day + 4
-        width = max(((bar_end - earliest).days + 1) * pixel_per_day - 4, 4)
+        offset_days = (month - month).days  # 0; bar always starts at day 1.
+        duration_days = (bar_end - month).days + 1
+        left_pct = (offset_days + 0.15) / total_days * 100
+        width_pct = max((duration_days - 0.3) / total_days * 100, 1.0)
         group_bar = {
-            "start_offset": start_offset,
-            "width": width,
+            "start_offset": left_pct,
+            "width": width_pct,
             "status": status,
         }
 
@@ -122,6 +134,8 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day):
         "summary": {
             "total": total_count,
             "completed": completed_count,
+            "pending": pending_count,
+            "overdue": overdue_count,
             "status": status,
         },
         "group_bar": group_bar,
@@ -136,6 +150,7 @@ def task_list(request):
     templates = TaskTemplate.objects.all()
     weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     today = timezone.localdate()
+    holidays_set = hk_public_holidays(month.year)
 
     days_in_month = []
     if month.month == 12:
@@ -145,14 +160,18 @@ def task_list(request):
     total_days = (next_month - month).days
     for day in range(1, total_days + 1):
         d = date(month.year, month.month, day)
-        days_in_month.append({"date": d, "weekday": weekdays[d.weekday()]})
+        days_in_month.append({
+            "date": d,
+            "weekday": weekdays[d.weekday()],
+            "is_holiday": d in holidays_set,
+        })
 
     pixel_per_day = 28
     canvas_width = total_days * pixel_per_day
     canvas_total_width = 200 + canvas_width
-    today_offset = None
+    today_pct = None
     if month <= today <= date(month.year, month.month, total_days):
-        today_offset = (today - month).days * pixel_per_day
+        today_pct = ((today - month).days + 0.5) / total_days * 100
 
     # Group tasks. Tasks with group_id=None share a synthetic "Ungrouped" block
     # which is rendered last so real groups lead.
@@ -175,14 +194,14 @@ def task_list(request):
             continue
         group_blocks.append(
             _build_group_block(
-                groups_by_id[gid], gtasks, today, month, pixel_per_day
+                groups_by_id[gid], gtasks, today, month, pixel_per_day, total_days
             )
         )
 
     # Synthetic ungrouped block (only if there are ungrouped tasks).
     if None in grouped:
         group_blocks.append(
-            _build_group_block(None, grouped[None], today, month, pixel_per_day)
+            _build_group_block(None, grouped[None], today, month, pixel_per_day, total_days)
         )
 
     total = len(tasks_raw)
@@ -204,6 +223,7 @@ def task_list(request):
         {
             "tasks": all_tasks,
             "templates": templates,
+            "groups": Group.objects.all(),
             "month": month,
             "months": list(range(1, 13)),
             "days_in_month": days_in_month,
@@ -212,7 +232,7 @@ def task_list(request):
             "canvas_total_width": canvas_total_width,
             "total_days": total_days,
             "today": today,
-            "today_offset": today_offset,
+            "today_pct": today_pct,
             "total_count": total,
             "completed_count": completed,
             "pending_count": pending,
@@ -229,9 +249,12 @@ def task_toggle_finished(request, task_id):
     old_finished = task.finished
     task.finished = not task.finished
     if task.finished and not task.completion_date:
-        task.completion_date = timezone.localdate()
+        now_local = timezone.localtime()
+        task.completion_date = now_local.date()
+        task.completion_time = now_local.time()
     elif not task.finished:
         task.completion_date = None
+        task.completion_time = None
     task.save()
     AuditLog.objects.create(
         task=task,
@@ -243,8 +266,40 @@ def task_toggle_finished(request, task_id):
         },
     )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"ok": True, "finished": task.finished})
+        # B9: client-side update path; return the formatted completion string
+        # so the row's "Completed At" cell can be updated without reloading.
+        return JsonResponse({
+            "ok": True,
+            "finished": task.finished,
+            "completion_display": _format_completion(task),
+        })
     return redirect("task_list")
+
+
+def _format_completion(task):
+    """Format 'YYYY-MM-DD HH:MM' for tasks with a time, else 'YYYY-MM-DD'.
+    Returns '' for tasks that aren't finished (or have no completion date)."""
+    if not task.completion_date:
+        return ""
+    if task.completion_time:
+        return f"{task.completion_date.isoformat()} {task.completion_time.strftime('%H:%M')}"
+    return task.completion_date.isoformat()
+
+
+def _parse_completion(value):
+    """Parse the value from a <input type=date> or <input type=datetime-local>
+    form field. Accepts:
+      * '' / None → (None, None)
+      * 'YYYY-MM-DD' → (date, None)
+      * 'YYYY-MM-DDTHH:MM' or 'YYYY-MM-DDTHH:MM:SS' → (date, time)
+    """
+    value = (value or "").strip()
+    if not value:
+        return None, None
+    if "T" in value:
+        date_part, time_part = value.split("T", 1)
+        return date.fromisoformat(date_part), time.fromisoformat(time_part)
+    return date.fromisoformat(value), None
 
 
 # --- Inline save comment (E4) ---
@@ -277,6 +332,7 @@ def task_add(request):
         comments = request.POST.get("comments", "")
         month = _get_current_month(request)
         scheduled_date = calculate_scheduled_date(month, sla_days, sla_type)
+        group_id = _parse_group_id(request.POST.get("group"))
 
         task = Task.objects.create(
             task_name=task_name,
@@ -286,6 +342,7 @@ def task_add(request):
             scheduled_date=scheduled_date,
             month=month,
             comments=comments,
+            group_id=group_id,
         )
         AuditLog.objects.create(
             task=task,
@@ -301,6 +358,7 @@ def task_add(request):
         "templates": templates,
         "templates_json": json.dumps([{"id": t.id, "task_name": t.task_name, "assigned_to": t.assigned_to, "sla_days": t.sla_days, "sla_type": t.sla_type} for t in templates]),
         "month": _get_current_month(request),
+        "groups": Group.objects.all(),
     })
 
 
@@ -314,6 +372,7 @@ def task_edit(request, task_id):
             "sla_type": task.sla_type,
             "finished": task.finished,
             "completion_date": str(task.completion_date) if task.completion_date else None,
+            "completion_time": str(task.completion_time) if task.completion_time else None,
             "comments": task.comments,
         }
         task.task_name = request.POST.get("task_name", task.task_name)
@@ -322,9 +381,11 @@ def task_edit(request, task_id):
         task.sla_type = request.POST.get("sla_type", task.sla_type)
         finished = request.POST.get("finished") == "on"
         task.finished = finished
-        comp_date = request.POST.get("completion_date", "")
-        task.completion_date = date.fromisoformat(comp_date) if comp_date else None
+        task.completion_date, task.completion_time = _parse_completion(
+            request.POST.get("completion_date", "")
+        )
         task.comments = request.POST.get("comments", "")
+        task.group_id = _parse_group_id(request.POST.get("group"))
         task.scheduled_date = calculate_scheduled_date(task.month, task.sla_days, task.sla_type)
         task.save()
 
@@ -335,7 +396,9 @@ def task_edit(request, task_id):
             "sla_type": task.sla_type,
             "finished": task.finished,
             "completion_date": str(task.completion_date) if task.completion_date else None,
+            "completion_time": str(task.completion_time) if task.completion_time else None,
             "comments": task.comments,
+            "group_id": task.group_id,
         }
         AuditLog.objects.create(
             task=task,
@@ -349,28 +412,41 @@ def task_edit(request, task_id):
     return render(request, "tracker/task_form.html", {
         "task": task,
         "month": _get_current_month(request),
+        "groups": Group.objects.all(),
     })
 
 
-@require_POST
-def task_inline_save(request, task_id):
-    task = get_object_or_404(Task, id=task_id)
+def _apply_task_updates(task, payload):
+    """Apply an update payload to ``task`` and return the (old, new) value dicts.
+
+    Used by both ``task_inline_save`` (per-row AJAX) and ``task_bulk_save``
+    (multi-row Edit-All + Save All) so validation stays in one place.
+    ``payload`` is a dict-like that supports ``.get(key, default)``. ``group``
+    is optional — when absent, the existing group_id is preserved.
+    """
     old_values = {
         "task_name": task.task_name,
         "assigned_to": task.assigned_to,
         "sla_days": task.sla_days,
         "sla_type": task.sla_type,
         "completion_date": str(task.completion_date) if task.completion_date else None,
+        "completion_time": str(task.completion_time) if task.completion_time else None,
         "comments": task.comments,
+        "group_id": task.group_id,
     }
-    task.task_name = request.POST.get("task_name", task.task_name)
-    task.assigned_to = request.POST.get("assigned_to", task.assigned_to)
-    task.sla_days = int(request.POST.get("sla_days", task.sla_days))
-    task.sla_type = request.POST.get("sla_type", task.sla_type)
-    comp_date = request.POST.get("completion_date", "")
-    task.completion_date = date.fromisoformat(comp_date) if comp_date else None
-    task.comments = request.POST.get("comments", task.comments)
-    task.scheduled_date = calculate_scheduled_date(task.month, task.sla_days, task.sla_type)
+    task.task_name = payload.get("task_name", task.task_name)
+    task.assigned_to = payload.get("assigned_to", task.assigned_to)
+    task.sla_days = int(payload.get("sla_days", task.sla_days))
+    task.sla_type = payload.get("sla_type", task.sla_type)
+    task.completion_date, task.completion_time = _parse_completion(
+        payload.get("completion_date", "") or ""
+    )
+    task.comments = payload.get("comments", task.comments)
+    if "group" in payload:
+        task.group_id = _parse_group_id(payload.get("group"))
+    task.scheduled_date = calculate_scheduled_date(
+        task.month, task.sla_days, task.sla_type
+    )
     task.save()
     new_values = {
         "task_name": task.task_name,
@@ -378,8 +454,17 @@ def task_inline_save(request, task_id):
         "sla_days": task.sla_days,
         "sla_type": task.sla_type,
         "completion_date": str(task.completion_date) if task.completion_date else None,
+        "completion_time": str(task.completion_time) if task.completion_time else None,
         "comments": task.comments,
+        "group_id": task.group_id,
     }
+    return old_values, new_values
+
+
+@require_POST
+def task_inline_save(request, task_id):
+    task = get_object_or_404(Task, id=task_id)
+    old_values, new_values = _apply_task_updates(task, request.POST)
     AuditLog.objects.create(
         task=task,
         task_name=task.task_name,
@@ -392,6 +477,100 @@ def task_inline_save(request, task_id):
             "scheduled_date": task.scheduled_date.isoformat(),
             "sla_type_short": "WD" if task.sla_type == "Working Day" else "CD",
         })
+    return redirect("task_list")
+
+
+def _bulk_payload_from_request(request):
+    """Parse a bulk-save POST body into a list of {id, fields} dicts.
+
+    Accepts either ``Content-Type: application/json`` (``{"updates": [...]}``)
+    or normal form-encoded ``updates[<idx>][id]=…``-style data mirroring what
+    the JS will send. Skips entries without an ``id``.
+    """
+    updates = []
+    if request.content_type and request.content_type.startswith("application/json"):
+        try:
+            payload = json.loads(request.body.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            return []
+        raw_list = payload.get("updates") if isinstance(payload, dict) else payload
+        if not isinstance(raw_list, list):
+            return []
+        for entry in raw_list:
+            if not isinstance(entry, dict):
+                continue
+            if "id" not in entry:
+                continue
+            try:
+                entry_id = int(entry["id"])
+            except (TypeError, ValueError):
+                continue
+            updates.append((entry_id, entry))
+        return updates
+    # Form-encoded: parse updates[<idx>][field]=…
+    raw = request.POST
+    by_index: dict[int, dict] = {}
+    for key in raw.keys():
+        if not key.startswith("updates[") or "][" not in key:
+            continue
+        try:
+            head, field = key.split("][", 1)
+            index = int(head[len("updates["):])
+        except ValueError:
+            continue
+        field = field.rstrip("]")
+        by_index.setdefault(index, {})[field] = raw.get(key)
+    for index in sorted(by_index):
+        entry = by_index[index]
+        if "id" not in entry:
+            continue
+        try:
+            entry_id = int(entry["id"])
+        except (TypeError, ValueError):
+            continue
+        updates.append((entry_id, entry))
+    return updates
+
+
+@require_POST
+def task_bulk_save(request):
+    """Apply a batch of task updates atomically.
+
+    Body (JSON): ``{"updates": [{"id": 1, "task_name": "…", ...}, ...]}``.
+    All rows commit in one transaction; if any single update raises ValueError
+    (bad ``sla_days``, bad date), nothing is written and the error is returned.
+    """
+    updates = _bulk_payload_from_request(request)
+    if not updates:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": False, "error": "no_updates"}, status=400)
+        messages.error(request, "No task updates were received.")
+        return redirect("task_list")
+
+    saved_ids: list[int] = []
+    try:
+        with transaction.atomic():
+            for entry_id, payload in updates:
+                task = Task.objects.filter(id=entry_id).first()
+                if task is None:
+                    raise ValueError(f"Task {entry_id} not found")
+                old_values, new_values = _apply_task_updates(task, payload)
+                AuditLog.objects.create(
+                    task=task,
+                    task_name=task.task_name,
+                    action="updated",
+                    changes={"old": old_values, "new": new_values},
+                )
+                saved_ids.append(task.id)
+    except (ValueError, TypeError) as exc:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+        messages.error(request, f"Bulk save failed: {exc}")
+        return redirect("task_list")
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"ok": True, "saved": saved_ids})
+    messages.success(request, f"Updated {len(saved_ids)} task(s).")
     return redirect("task_list")
 
 
@@ -480,6 +659,7 @@ def generate_next_month(request):
                 sla_type=tmpl.sla_type,
                 scheduled_date=scheduled,
                 month=next_month,
+                group_id=tmpl.group_id,
             )
     else:
         last_month_tasks = Task.objects.filter(month=current_month)
@@ -492,6 +672,7 @@ def generate_next_month(request):
                 sla_type=t.sla_type,
                 scheduled_date=scheduled,
                 month=next_month,
+                group_id=t.group_id,
             )
 
     request.session["current_month"] = next_month.isoformat()
@@ -649,29 +830,103 @@ def template_edit(request, template_id):
     )
 
 
-@require_POST
-def template_inline_save(request, template_id):
-    tmpl = get_object_or_404(TaskTemplate, id=template_id)
-    tmpl.task_name = request.POST.get("task_name", tmpl.task_name)
-    tmpl.assigned_to = request.POST.get("assigned_to", tmpl.assigned_to)
-    tmpl.sla_days = int(request.POST.get("sla_days", tmpl.sla_days))
-    tmpl.sla_type = request.POST.get("sla_type", tmpl.sla_type)
+def _apply_template_updates(tmpl, payload):
+    """Apply an update payload to ``tmpl``. Returns ``(shifted, old, new)``.
+
+    ``payload`` is a dict-like that supports ``.get(key, default)``. ``group``
+    is optional — when absent, the existing group_id is preserved.
+    ``sort_order`` defaults to the current value so un-touched rows stay put.
+    """
+    old_values = {
+        "task_name": tmpl.task_name,
+        "assigned_to": tmpl.assigned_to,
+        "sla_days": tmpl.sla_days,
+        "sla_type": tmpl.sla_type,
+        "sort_order": tmpl.sort_order,
+        "group_id": tmpl.group_id,
+    }
+    tmpl.task_name = payload.get("task_name", tmpl.task_name)
+    tmpl.assigned_to = payload.get("assigned_to", tmpl.assigned_to)
+    tmpl.sla_days = int(payload.get("sla_days", tmpl.sla_days))
+    tmpl.sla_type = payload.get("sla_type", tmpl.sla_type)
     requested = _parse_int_field(
-        request.POST.get("sort_order"), default=tmpl.sort_order
+        payload.get("sort_order"), default=tmpl.sort_order
     )
     actual, shifted = _assign_template_sort_order(requested, exclude_id=tmpl.id)
     tmpl.sort_order = actual
-    if "group" in request.POST:
-        tmpl.group_id = _parse_group_id(request.POST.get("group"))
+    if "group" in payload:
+        tmpl.group_id = _parse_group_id(payload.get("group"))
     tmpl.save()
+    new_values = {
+        "task_name": tmpl.task_name,
+        "assigned_to": tmpl.assigned_to,
+        "sla_days": tmpl.sla_days,
+        "sla_type": tmpl.sla_type,
+        "sort_order": tmpl.sort_order,
+        "group_id": tmpl.group_id,
+    }
+    return shifted, old_values, new_values
+
+
+@require_POST
+def template_inline_save(request, template_id):
+    tmpl = get_object_or_404(TaskTemplate, id=template_id)
+    shifted, old_values, new_values = _apply_template_updates(tmpl, request.POST)
     if shifted and request.headers.get("X-Requested-With") != "XMLHttpRequest":
         messages.info(
             request,
-            f"Reordered {shifted} template(s) to make room for order {actual}.",
+            f"Reordered {shifted} template(s) to make room for order {new_values['sort_order']}.",
         )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse(
-            {"ok": True, "sort_order": actual, "group_id": tmpl.group_id}
+            {"ok": True, "sort_order": tmpl.sort_order, "group_id": tmpl.group_id}
+        )
+    return redirect("template_list")
+
+
+@require_POST
+def template_bulk_save(request):
+    """Apply a batch of template updates atomically.
+
+    Same shape as ``task_bulk_save``. Sort-order collisions against OTHER
+    templates shift them via the existing ``_assign_template_sort_order``
+    helper. ``group`` is optional in each row.
+
+    Note: templates don't write to ``AuditLog`` — its ``task`` FK points at
+    ``Task``, not ``TaskTemplate`` (matches the existing
+    ``template_inline_save`` behaviour).
+    """
+    updates = _bulk_payload_from_request(request)
+    if not updates:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": False, "error": "no_updates"}, status=400)
+        messages.error(request, "No template updates were received.")
+        return redirect("template_list")
+
+    saved_ids: list[int] = []
+    total_shifted = 0
+    try:
+        with transaction.atomic():
+            for entry_id, payload in updates:
+                tmpl = TaskTemplate.objects.filter(id=entry_id).first()
+                if tmpl is None:
+                    raise ValueError(f"Template {entry_id} not found")
+                shifted, _, _ = _apply_template_updates(tmpl, payload)
+                saved_ids.append(tmpl.id)
+                total_shifted += shifted
+    except (ValueError, TypeError) as exc:
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+        messages.error(request, f"Bulk save failed: {exc}")
+        return redirect("template_list")
+
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"ok": True, "saved": saved_ids, "shifted": total_shifted})
+    messages.success(request, f"Updated {len(saved_ids)} template(s).")
+    if total_shifted:
+        messages.info(
+            request,
+            f"Reordered {total_shifted} template(s) to accommodate unique sort orders.",
         )
     return redirect("template_list")
 
@@ -816,6 +1071,9 @@ _BULK_HEADER_ALIASES = {
     "type": "sla_type",
     "sortorder": "sort_order",
     "order": "sort_order",
+    "group": "group",
+    "groupname": "group",
+    "group_name": "group",
 }
 _BULK_REQUIRED = {"task_name", "assigned_to", "sla_days", "sla_type"}
 _BULK_SLA_TYPES = {choice for choice, _ in TaskTemplate.SLAType.choices}
@@ -859,7 +1117,7 @@ def _parse_bulk_csv(csv_text: str) -> tuple[list[str], list[dict], list[str]]:
     # If the first row doesn't look like a header at all, assume a positional
     # layout: task_name, assigned_to, sla_days, sla_type [, sort_order].
     if not mapping:
-        positional = ["task_name", "assigned_to", "sla_days", "sla_type", "sort_order"]
+        positional = ["task_name", "assigned_to", "sla_days", "sla_type", "sort_order", "group"]
         for idx, field in enumerate(positional):
             if idx < len(rows[0]):
                 mapping[idx] = field
@@ -921,17 +1179,46 @@ def template_bulk_upload(request):
 
     created = 0
     total_shifted = 0
+    auto_created_groups: list[str] = []
     with transaction.atomic():
+        # Auto-create any groups referenced by the CSV that don't already
+        # exist. Names are matched case-insensitively (matching the lookup
+        # behaviour below); create_missing skips names already present.
+        existing_group_names = {g.name.lower() for g in Group.objects.all()}
+        csv_group_names: list[str] = []
+        seen_in_csv: set[str] = set()
+        for record in records:
+            raw = (record.get("group") or "").strip()
+            if not raw:
+                continue
+            key = raw.lower()
+            if key in seen_in_csv:
+                continue
+            seen_in_csv.add(key)
+            if key not in existing_group_names:
+                csv_group_names.append(raw)
+        for name in csv_group_names:
+            actual_sort, _ = _assign_group_sort_order(None)
+            Group.objects.create(name=name, sort_order=actual_sort)
+            auto_created_groups.append(name)
+            existing_group_names.add(name.lower())
+
+        # Refresh the lookup now that any missing groups exist so the row
+        # loop below resolves all group references correctly.
+        groups_by_name = {g.name.lower(): g.id for g in Group.objects.all()}
+
         for record in records:
             actual, shifted = _assign_template_sort_order(record.get("sort_order"))
             total_shifted += shifted
+            group_name = (record.get("group") or "").strip().lower()
+            group_id = groups_by_name.get(group_name) if group_name else None
             TaskTemplate.objects.create(
                 task_name=record["task_name"],
                 assigned_to=record["assigned_to"],
                 sla_days=record["sla_days"],
                 sla_type=record["sla_type"],
                 sort_order=actual,
-                group_id=_parse_group_id(record.get("group_id")),
+                group_id=group_id,
             )
             created += 1
 
@@ -941,6 +1228,13 @@ def template_bulk_upload(request):
             f"Bulk upload from {source}: created {created} template(s)."
             + (f" {len(warnings)} warning(s)." if warnings else ""),
         )
+        if auto_created_groups:
+            messages.info(
+                request,
+                "Auto-created group(s): "
+                + ", ".join(auto_created_groups)
+                + ".",
+            )
         if total_shifted:
             messages.info(
                 request,

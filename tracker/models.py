@@ -25,6 +25,7 @@ class Task(models.Model):
     scheduled_date = models.DateField()
     finished = models.BooleanField(default=False)
     completion_date = models.DateField(null=True, blank=True)
+    completion_time = models.TimeField(null=True, blank=True)
     comments = models.TextField(blank=True, default="")
     month = models.DateField()
     group = models.ForeignKey(
@@ -95,6 +96,7 @@ class AuditLog(models.Model):
                 "task_name": "Task Name", "assigned_to": "Assigned To",
                 "sla_days": "SLA Days", "sla_type": "SLA Type",
                 "finished": "Finished", "completion_date": "Completion Date",
+                "completion_time": "Completion Time",
                 "comments": "Comments",
             }
             for key in new:

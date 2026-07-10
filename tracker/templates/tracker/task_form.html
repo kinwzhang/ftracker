@@ -33,8 +33,18 @@
                     </div>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label fw500">Completion Date</label>
-                    <input type="date" name="completion_date" class="form-control" value="{{ task.completion_date|date:'Y-m-d'|default:'' }}">
+                    <label class="form-label fw500">Completed At</label>
+                    <input type="datetime-local" name="completion_date" class="form-control"
+                           value="{% if task.completion_date %}{{ task.completion_date|date:'Y-m-d' }}{% if task.completion_time %}T{{ task.completion_time|time:'H:i' }}{% endif %}{% endif %}">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label fw500">Group</label>
+                    <select name="group" class="form-select">
+                        <option value="">— Ungrouped —</option>
+                        {% for g in groups %}
+                        <option value="{{ g.id }}" {% if task and task.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
                 <div class="col-md-12">
                     <label class="form-label fw500">Comments</label>

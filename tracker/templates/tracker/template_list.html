@@ -69,8 +69,16 @@
 </div>
 
 <div class="glass-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Templates</span>
+        <span class="d-flex align-items-center gap-2">
+            <button type="button" class="btn btn-sm btn-outline-primary js-tmpl-bulk-edit-toggle" id="tmplBulkEditToggle">Edit All</button>
+            <button type="button" class="btn btn-sm btn-primary js-tmpl-bulk-save" id="tmplBulkSaveBtn" style="display:none;">Save All</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-tmpl-bulk-cancel" id="tmplBulkCancelBtn" style="display:none;">Cancel</button>
+        </span>
+    </div>
     <div class="card-body p-0">
-        <table class="table table-sm mb-0">
+        <table class="table table-sm mb-0" id="tmpl-table">
             <thead>
                 <tr>
                     <th>Order</th>
@@ -79,7 +87,7 @@
                     <th>SLA Days</th>
                     <th>SLA Type</th>
                     <th>Group</th>
-                    <th style="width:160px;">Actions</th>
+                    <th style="width:240px;">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -118,16 +126,22 @@
                             {% endfor %}
                         </select>
                     </td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-secondary view-mode edit-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Edit</button>
+                    <td class="actions-cell" style="white-space:nowrap;">
+                        <span class="view-mode">
+                            <button class="btn btn-sm btn-outline-secondary edit-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Edit</button>
+                            <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete template {{ tmpl.task_name }}?')">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
+                            </form>
+                        </span>
                         <span class="edit-mode" style="display:none;">
                             <button class="btn btn-sm btn-primary save-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Save</button>
                             <button class="btn btn-sm btn-outline-secondary cancel-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Cancel</button>
+                            <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete template {{ tmpl.task_name }}?')">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
+                            </form>
                         </span>
-                        <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete template {{ tmpl.task_name }}?')">
-                            {% csrf_token %}
-                            <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
-                        </form>
                     </td>
                 </tr>
                 {% endwith %}
@@ -218,6 +232,83 @@
             });
         });
     });
+
+    // --- Bulk edit / Save All (templates) ---
+    var tmplToggle = document.getElementById('tmplBulkEditToggle');
+    var tmplSave = document.getElementById('tmplBulkSaveBtn');
+    var tmplCancel = document.getElementById('tmplBulkCancelBtn');
+    var tmplFieldSelectors = [
+        '.edit-order', '.edit-tname', '.edit-assigned',
+        '.edit-sla-days', '.edit-sla-type', '.edit-group-id',
+    ];
+
+    function tmplSnapshot() {
+        document.querySelectorAll('#tmpl-table tr[id^="tmpl-row-"]').forEach(function(row) {
+            tmplFieldSelectors.forEach(function(sel) {
+                var el = row.querySelector(sel);
+                if (el) el.dataset.initial = el.value;
+            });
+        });
+    }
+
+    function enterTmplBulkEdit() {
+        document.body.classList.add('js-bulk-editing');
+        tmplSnapshot();
+        tmplToggle.style.display = 'none';
+        tmplSave.style.display = '';
+        tmplCancel.style.display = '';
+    }
+
+    function exitTmplBulkEdit(reload) {
+        document.body.classList.remove('js-bulk-editing');
+        if (reload) { location.reload(); return; }
+        tmplToggle.style.display = '';
+        tmplSave.style.display = 'none';
+        tmplCancel.style.display = 'none';
+    }
+
+    if (tmplToggle) tmplToggle.addEventListener('click', enterTmplBulkEdit);
+    if (tmplCancel) tmplCancel.addEventListener('click', function() { exitTmplBulkEdit(true); });
+    if (tmplSave) {
+        tmplSave.addEventListener('click', function() {
+            var updates = [];
+            document.querySelectorAll('#tmpl-table tr[id^="tmpl-row-"]').forEach(function(row) {
+                var id = row.id.replace(/^tmpl-row-/, '');
+                var dirty = false;
+                var payload = { id: id };
+                tmplFieldSelectors.forEach(function(sel) {
+                    var el = row.querySelector(sel);
+                    if (!el) return;
+                    var name = sel.replace(/^\.edit-/, '');
+                    var cur = el.value;
+                    payload[name] = cur;
+                    if ((el.dataset.initial || '') !== cur) dirty = true;
+                });
+                if (dirty) updates.push(payload);
+            });
+            if (!updates.length) { exitTmplBulkEdit(true); return; }
+            tmplSave.disabled = true;
+            tmplSave.textContent = 'Saving…';
+            fetch('/templates/bulk-save/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrftoken,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ updates: updates }),
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                tmplSave.disabled = false;
+                tmplSave.textContent = 'Save All';
+                if (data && data.ok) location.reload();
+                else alert('Bulk save failed: ' + ((data && data.error) || 'unknown'));
+            }).catch(function(err) {
+                tmplSave.disabled = false;
+                tmplSave.textContent = 'Save All';
+                alert('Bulk save failed: ' + err);
+            });
+        });
+    }
 })();
 </script>
 
@@ -232,8 +323,9 @@
                 </div>
                 <div class="modal-body">
                     <p class="text-muted small mb-3">
-                        CSV columns (header row optional): <code>task_name, assigned_to, sla_days, sla_type, sort_order</code>.
+                        CSV columns (header row optional): <code>task_name, assigned_to, sla_days, sla_type, sort_order, group</code>.
                         <code>sla_type</code> must be <code>Working Day</code> or <code>Calendar Day</code>.
+                        <code>group</code> is optional and must match an existing group name.
                     </p>
                     <ul class="nav nav-pills nav-sm mb-3" role="tablist">
                         <li class="nav-item" role="presentation">
@@ -252,7 +344,7 @@
                             <input type="file" name="csv_file" accept=".csv,text/csv" class="form-control" id="bulk-csv-file">
                         </div>
                         <div class="tab-pane fade" id="bulk-pane-paste" role="tabpanel" aria-labelledby="bulk-tab-paste">
-                            <textarea name="csv_text" class="form-control" rows="8" placeholder="task_name,assigned_to,sla_days,sla_type,sort_order&#10;Monthly report,Alice,3,Working Day,1&#10;Backup check,Bob,1,Calendar Day,2" id="bulk-csv-text"></textarea>
+                            <textarea name="csv_text" class="form-control" rows="8" placeholder="task_name,assigned_to,sla_days,sla_type,sort_order,group&#10;Monthly report,Alice,3,Working Day,1,Finance&#10;Backup check,Bob,1,Calendar Day,2,IT" id="bulk-csv-text"></textarea>
                         </div>
                     </div>
                 </div>

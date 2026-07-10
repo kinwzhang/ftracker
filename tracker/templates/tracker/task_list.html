@@ -38,7 +38,7 @@
     <div class="col-md-4">
         <div class="stat-card glass-warning">
             <p class="stat-number">{{ pending_count }}</p>
-            <p class="stat-label">Pending</p>
+            <p class="stat-label">In Progress</p>
         </div>
     </div>
     <div class="col-md-4">
@@ -64,45 +64,64 @@
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Gantt Chart</span>
         <span class="d-flex gap-2">
-            <button type="button" class="btn btn-sm btn-outline-secondary js-expand-all">Expand all</button>
-            <button type="button" class="btn btn-sm btn-outline-secondary js-collapse-all">Collapse all</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-gantt-expand-all">Expand all</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-gantt-collapse-all">Collapse all</button>
         </span>
     </div>
     <div class="card-body gantt-chart">
-        <div class="gantt-canvas" style="width: {{ canvas_total_width }}px;">
-            <div class="day-header" style="margin-left: 200px; width: {{ canvas_width }}px;">
+        <div class="gantt-canvas">
+            <div class="day-header">
+                <div class="day-header-spacer"></div>
                 {% for d in days_in_month %}
-                <div class="day-cell {% if d.weekday == 'Sat' or d.weekday == 'Sun' %}weekend{% endif %} {% if d.date == today %}today{% endif %}">
-                    {{ d.date|date:"j" }}<br><span style="font-size:0.6rem;">{{ d.weekday|slice:":1" }}</span>
+                <div class="day-cell {% if d.weekday == 'Sat' or d.weekday == 'Sun' %}weekend{% endif %} {% if d.is_holiday %}holiday{% endif %} {% if d.date == today %}today{% endif %}">
+                    {{ d.date|date:"j" }}<br><span class="day-cell-wday">{{ d.weekday }}</span>
                 </div>
                 {% endfor %}
             </div>
-            <div style="margin-top:6px; position:relative;">
-                {% if today_offset is not None %}
-                <div class="today-line" style="left: {{ today_offset|add:200 }}px;"></div>
+            <div class="gantt-tracks-wrapper">
+                {% if today_pct is not None %}
+                <div class="today-line" style="left: calc(200px + (100% - 200px) * {{ today_pct }} / 100);"></div>
                 {% endif %}
                 {% for block in group_blocks %}
                 <details class="gantt-group-block" data-group-id="{{ block.id }}" open>
-                    <summary class="gantt-row gantt-group-summary">
+                    <summary class="gantt-row gantt-group-summary status-{{ block.summary.status }}">
                         <div class="gantt-label">
                             <span class="gantt-group-chevron"></span>
                             <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
                             <span class="badge bg-secondary ms-1">{{ block.summary.completed }}/{{ block.summary.total }}</span>
                         </div>
-                        <div class="gantt-track" style="width: {{ canvas_width }}px;">
+                        <div class="gantt-track">
                             {% if block.group_bar %}
-                            <div class="gantt-bar group {{ block.group_bar.status }}"
-                                 style="left: {{ block.group_bar.start_offset }}px; width: {{ block.group_bar.width }}px;"
-                                 title="Group: {{ block.group.name|default:'Ungrouped' }} ({{ block.group_bar.status }})"></div>
+                            <div class="gantt-bar group status-{{ block.group_bar.status }}"
+                                 style="left: {{ block.group_bar.start_offset }}%; width: {{ block.group_bar.width }}%;"
+                                 title="{{ block.group.name|default:'Ungrouped' }} — {{ block.summary.overdue }} overdue, {{ block.summary.pending }} in progress, {{ block.summary.completed }} completed">
+                                <span class="gantt-bar-label">
+                                    {% if block.summary.overdue %}
+                                    <span class="gantt-bar-count gantt-bar-count-overdue">
+                                        <strong>{{ block.summary.overdue }}</strong> overdue
+                                    </span>
+                                    {% endif %}
+                                    {% if block.summary.pending %}
+                                    <span class="gantt-bar-count gantt-bar-count-pending">
+                                        <strong>{{ block.summary.pending }}</strong> in progress
+                                    </span>
+                                    {% endif %}
+                                    {% if block.summary.completed %}
+                                    <span class="gantt-bar-count gantt-bar-count-completed">
+                                        <strong>{{ block.summary.completed }}</strong> completed
+                                    </span>
+                                    {% endif %}
+                                </span>
+                            </div>
                             {% endif %}
                         </div>
                     </summary>
                     {% for gt in block.gantt_tasks %}
                     <div class="gantt-row">
                         <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
-                        <div class="gantt-track" style="width: {{ canvas_width }}px;">
+                        <div class="gantt-track">
                             <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
-                                 style="left: {{ gt.start_offset }}px; width: {{ gt.duration }}px;"
+                                 style="left: {{ gt.start_offset }}%; width: {{ gt.duration }}%;"
                                  title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
                         </div>
                     </div>
@@ -118,34 +137,46 @@
 <div class="glass-card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Task List</span>
-        <span class="text-muted small px-2" id="editModeLabel" style="display:none;">Editing — <a href="#" onclick="exitEditMode();return false;">Done</a></span>
+        <span class="d-flex align-items-center gap-2 flex-wrap">
+            <span class="text-muted small px-2" id="editModeLabel" style="display:none;">Editing — <a href="#" onclick="exitEditMode();return false;">Done</a></span>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-table-expand-all">Expand all</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-table-collapse-all">Collapse all</button>
+            <button type="button" class="btn btn-sm btn-outline-primary js-bulk-edit-toggle" id="bulkEditToggle">Edit All</button>
+            <button type="button" class="btn btn-sm btn-primary js-bulk-save" id="bulkSaveBtn" style="display:none;">Save All</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary js-bulk-cancel" id="bulkCancelBtn" style="display:none;">Cancel</button>
+        </span>
     </div>
     <div class="card-body p-0">
         <table class="table table-sm mb-0" id="task-table">
             <thead>
                 <tr>
                     <th style="width:40px;">Done</th>
-                    <th style="width:30%;">Task Name</th>
-                    <th style="width:15%;">Assigned To</th>
+                    <th style="width:25%;">Task Name</th>
+                    <th style="width:12%;">Assigned To</th>
                     <th style="width:90px;">SLA</th>
-                    <th style="width:130px;">Scheduled Date</th>
-                    <th style="width:130px;">Completion Date</th>
+                    <th style="width:120px;">Scheduled</th>
+                    <th style="width:140px;">Completed At</th>
                     <th>Comments</th>
-                    <th style="width:90px;"></th>
+                    <th style="width:120px;">Group</th>
+                    <th style="width:220px;"></th>
                 </tr>
             </thead>
             <tbody>
                 {% for block in group_blocks %}
                 <tr class="group-summary-row table-group-summary status-{{ block.summary.status }}" data-group-id="{{ block.id }}">
-                    <td colspan="8">
+                    <td colspan="9">
                         <span class="gantt-group-chevron"></span>
                         <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
-                        <span class="badge bg-secondary ms-1">{{ block.summary.completed }}/{{ block.summary.total }} done</span>
+                        <span class="group-summary-counts ms-2">
+                            {% if block.summary.overdue %}<span class="gantt-bar-count gantt-bar-count-overdue"><strong>{{ block.summary.overdue }}</strong> overdue</span>{% endif %}
+                            {% if block.summary.pending %}<span class="gantt-bar-count gantt-bar-count-pending"><strong>{{ block.summary.pending }}</strong> in progress</span>{% endif %}
+                            {% if block.summary.completed %}<span class="gantt-bar-count gantt-bar-count-completed"><strong>{{ block.summary.completed }}</strong> completed</span>{% endif %}
+                        </span>
                     </td>
                 </tr>
                 {% for task in block.tasks %}
                 {% with st=task.sla_type %}
-                <tr id="task-row-{{ task.id }}" data-group-id="{{ block.id }}" data-group-row class="{% if task.finished %}row-completed{% elif task.scheduled_date < today %}row-overdue{% else %}row-pending{% endif %}">
+                <tr id="task-row-{{ task.id }}" data-group-id="{{ block.id }}" data-group-row data-scheduled-date="{{ task.scheduled_date|date:'Y-m-d' }}" class="{% if task.finished %}row-completed{% elif task.scheduled_date < today %}row-overdue{% else %}row-pending{% endif %}">
                     <td>
                         <input type="checkbox" class="form-check-input toggle-finished" data-task-id="{{ task.id }}" {% if task.finished %}checked{% endif %}>
                     </td>
@@ -172,23 +203,34 @@
                         <span class="edit-mode" style="display:none;">{{ task.scheduled_date|date:"Y-m-d" }}</span>
                     </td>
                     <td>
-                        <span class="view-mode">{{ task.completion_date|date:"Y-m-d"|default:"-" }}</span>
-                        <input type="date" class="edit-mode form-control form-control-sm edit-comp-date" value="{{ task.completion_date|date:'Y-m-d'|default:'' }}" style="display:none;">
+                        <span class="view-mode">{% if task.completion_date %}{{ task.completion_date|date:"Y-m-d" }}{% if task.completion_time %} {{ task.completion_time|time:"H:i" }}{% endif %}{% else %}-{% endif %}</span>
+                        <input type="datetime-local" class="edit-mode form-control form-control-sm edit-comp-date"
+                               value="{% if task.completion_date %}{{ task.completion_date|date:'Y-m-d' }}{% if task.completion_time %}T{{ task.completion_time|time:'H:i' }}{% endif %}{% endif %}"
+                               style="display:none;">
                     </td>
                     <td class="comment-cell" data-task-id="{{ task.id }}">
                         <span class="view-mode comment-display" title="Click to edit">{% if task.comments %}{{ task.comments|truncatechars:20 }}{% else %}<span class="text-muted">(click to add)</span>{% endif %}</span>
                         <input type="text" class="edit-mode form-control form-control-sm edit-comments comment-input" value="{{ task.comments }}" style="display:none;">
                     </td>
                     <td>
+                        <span class="view-mode">{% if task.group %}{{ task.group.name }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
+                        <select class="edit-mode form-select form-select-sm edit-group-id" style="display:none;">
+                            <option value="">— Ungrouped —</option>
+                            {% for g in groups %}
+                            <option value="{{ g.id }}" {% if task.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="actions-cell" style="white-space:nowrap;">
                         <button class="btn btn-sm btn-outline-secondary edit-btn view-mode" data-task-id="{{ task.id }}">Edit</button>
                         <span class="edit-buttons edit-mode" style="display:none;">
                             <button class="btn btn-sm btn-primary save-btn" data-task-id="{{ task.id }}">Save</button>
                             <span class="delete-confirm" style="display:none;">
+                                <button class="btn btn-sm btn-outline-secondary cancel-delete" data-task-id="{{ task.id }}">No</button>
                                 <form method="post" action="{% url 'task_delete' task.id %}" style="display:inline;">
                                     {% csrf_token %}
                                     <button type="submit" class="btn btn-sm btn-danger">Confirm</button>
                                 </form>
-                                <button class="btn btn-sm btn-outline-secondary cancel-delete" data-task-id="{{ task.id }}">No</button>
                             </span>
                             <button class="btn btn-sm btn-outline-danger delete-btn" data-task-id="{{ task.id }}">Del</button>
                         </span>
@@ -225,7 +267,15 @@
             <div class="col-md-2">
                 <input type="text" name="comments" class="form-control form-control-sm" placeholder="Comments">
             </div>
-            <div class="col-md-2">
+            <div class="col-md-1">
+                <select name="group" class="form-select form-select-sm">
+                    <option value="">No group</option>
+                    {% for g in groups %}
+                    <option value="{{ g.id }}">{{ g.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-1">
                 <button type="submit" class="btn btn-sm btn-primary w-100">Add Task</button>
             </div>
         </form>
@@ -264,14 +314,143 @@ function stepMonth(btn, delta) {
 
     document.querySelectorAll('.toggle-finished').forEach(function(cb) {
         cb.addEventListener('change', function() {
-            fetch('/task/' + this.dataset.taskId + '/toggle/', {
+            var cb = this;
+            var taskId = cb.dataset.taskId;
+            var row = document.getElementById('task-row-' + taskId);
+            var groupId = row.dataset.groupId;
+            fetch('/task/' + taskId + '/toggle/', {
                 method: 'POST',
                 headers: {'X-CSRFToken': csrftoken, 'X-Requested-With': 'XMLHttpRequest'},
             }).then(function(r) { return r.json(); }).then(function(data) {
-                if (data.ok) location.reload();
+                if (!data || !data.ok) return;
+                // B9: update row + group summary client-side so the user's
+                // expand/collapse state is preserved (no location.reload).
+                updateTaskRowAfterToggle(row, data);
+                recomputeGroupSummary(groupId);
             });
         });
     });
+
+    // Row-level updates after a toggle-finished response: class for the
+    // status tint, completion date text. The browser already updated the
+    // checkbox checked state.
+    function updateTaskRowAfterToggle(row, data) {
+        var finished = !!data.finished;
+        var scheduledIso = row.dataset.scheduledDate;
+        var todayIso = new Date().toISOString().slice(0, 10);
+        // Re-derive the row's status class from finished + scheduled_date.
+        var newClass;
+        if (finished) {
+            newClass = 'row-completed';
+        } else if (scheduledIso < todayIso) {
+            newClass = 'row-overdue';
+        } else {
+            newClass = 'row-pending';
+        }
+        row.classList.remove('row-completed', 'row-overdue', 'row-pending');
+        row.classList.add(newClass);
+        // Update the completion date cell. The view-mode span lives in the
+        // 6th <td> (Done, Task Name, Assigned To, SLA, Scheduled, Completed At).
+        var compSpan = row.querySelectorAll('td')[5].querySelector('.view-mode');
+        if (compSpan) {
+            compSpan.textContent = data.completion_display || '-';
+        }
+    }
+
+    // After a toggle, recompute the group's overdue / pending / completed
+    // counts from the DOM and reflect them in:
+    //   * the table group-summary row (status class + counts text)
+    //   * the Gantt chart group bar (status class + bar overlay text + width)
+    // Width of the group bar doesn't change on toggle (scheduled_date is
+    // untouched), so we leave the existing left/width styles intact.
+    function recomputeGroupSummary(groupId) {
+        var rows = document.querySelectorAll(
+            '#task-table tr[data-group-row][data-group-id="' + groupId + '"]'
+        );
+        var counts = { overdue: 0, pending: 0, completed: 0 };
+        rows.forEach(function(r) {
+            if (r.classList.contains('row-completed')) counts.completed++;
+            else if (r.classList.contains('row-overdue')) counts.overdue++;
+            else if (r.classList.contains('row-pending')) counts.pending++;
+        });
+        // Dominant status mirrors the view helper: overdue > pending > completed.
+        var status;
+        if (counts.overdue > 0) status = 'overdue';
+        else if (counts.pending > 0) status = 'pending';
+        else status = 'completed';
+
+        // --- Table group-summary row ---
+        var tableSummary = document.querySelector(
+            'tr.table-group-summary[data-group-id="' + groupId + '"]'
+        );
+        if (tableSummary) {
+            tableSummary.classList.remove(
+                'status-overdue', 'status-pending', 'status-completed'
+            );
+            tableSummary.classList.add('status-' + status);
+            // Update each count span (or insert / remove it so 0-counts hide).
+            updateCountSpans(
+                tableSummary.querySelector('.group-summary-counts'),
+                counts
+            );
+        }
+
+        // --- Gantt group bar ---
+        var details = document.querySelector(
+            'details.gantt-group-block[data-group-id="' + groupId + '"]'
+        );
+        if (details) {
+            var bar = details.querySelector('summary .gantt-bar.group');
+            if (bar) {
+                bar.classList.remove(
+                    'status-overdue', 'status-pending', 'status-completed'
+                );
+                bar.classList.add('status-' + status);
+                // Hidden-by-default rules (status-overdue hides pending/completed,
+                // status-pending hides completed). The CSS uses .status-* on the
+                // bar, so changing the class re-evaluates those rules.
+                var label = bar.querySelector('.gantt-bar-label');
+                if (label) updateCountSpans(label, counts);
+                var title = bar.getAttribute('title');
+                if (title) {
+                    var baseTitle = title.split(' — ')[0];
+                    bar.setAttribute(
+                        'title',
+                        baseTitle + ' — ' + counts.overdue + ' overdue, '
+                            + counts.pending + ' in progress, '
+                            + counts.completed + ' completed'
+                    );
+                }
+            }
+        }
+    }
+
+    // Insert / update / remove the per-status count spans inside a parent
+    // container so the markup stays in sync with the server-rendered shape
+    // (gantt-bar-count-{overdue,pending,completed}, with a hidden span when
+    // the count is zero).
+    var COUNT_ORDER = ['overdue', 'pending', 'completed'];
+    var COUNT_LABELS = {
+        overdue: 'overdue', pending: 'in progress', completed: 'completed',
+    };
+    function updateCountSpans(parent, counts) {
+        if (!parent) return;
+        COUNT_ORDER.forEach(function(key) {
+            var cls = 'gantt-bar-count-' + key;
+            var span = parent.querySelector('.' + cls);
+            var n = counts[key];
+            if (n > 0) {
+                if (!span) {
+                    span = document.createElement('span');
+                    span.className = 'gantt-bar-count ' + cls;
+                    parent.appendChild(span);
+                }
+                span.innerHTML = '<strong>' + n + '</strong> ' + COUNT_LABELS[key];
+            } else if (span) {
+                span.parentNode.removeChild(span);
+            }
+        });
+    }
 
     var editRowId = null;
 
@@ -314,6 +493,8 @@ function stepMonth(btn, delta) {
             formData.append('sla_type', row.querySelector('.edit-sla-type').value);
             formData.append('completion_date', row.querySelector('.edit-comp-date').value);
             formData.append('comments', row.querySelector('.edit-comments').value);
+            var groupSelect = row.querySelector('.edit-group-id');
+            if (groupSelect) formData.append('group', groupSelect.value);
 
             fetch('/task/' + taskId + '/inline-save/', {
                 method: 'POST',
@@ -416,12 +597,15 @@ function stepMonth(btn, delta) {
         input.addEventListener('blur', function() { saveCommentEdit(cell); });
     });
 
-    // --- Group expand/collapse: keep Gantt <details> and table <tr>s in sync ---
-    function setGroupExpanded(groupId, expanded) {
-        // Gantt side
+    // --- Group expand/collapse: each side (Gantt / Table) maintains its
+    // own state. B8: clicking a group on one side no longer toggles the
+    // other; Expand all / Collapse all buttons only affect their own card. ---
+    function setGanttGroupExpanded(groupId, expanded) {
         var det = document.querySelector('details.gantt-group-block[data-group-id="' + groupId + '"]');
         if (det) det.open = expanded;
-        // Table side
+    }
+
+    function setTableGroupExpanded(groupId, expanded) {
         var summary = document.querySelector('tr.table-group-summary[data-group-id="' + groupId + '"]');
         if (summary) {
             summary.classList.toggle('collapsed', !expanded);
@@ -430,45 +614,165 @@ function stepMonth(btn, delta) {
         rows.forEach(function(r) { r.style.display = expanded ? '' : 'none'; });
     }
 
-    // Initial state: respect whatever server rendered.
+    // Initial state: respect whatever the server rendered for each side
+    // independently. Both default to "expanded" but a future reload (or a
+    // persisted preference) could render with either side collapsed.
+    document.querySelectorAll('details.gantt-group-block').forEach(function(det) {
+        setGanttGroupExpanded(det.dataset.groupId, det.open);
+    });
     document.querySelectorAll('tr.table-group-summary').forEach(function(summary) {
+        // Server renders the table rows visible by default; if a row has
+        // a data-collapsed hint we honour it. Otherwise leave them visible.
         var gid = summary.dataset.groupId;
-        var det = document.querySelector('details.gantt-group-block[data-group-id="' + gid + '"]');
-        var open = det ? det.open : true;
-        setGroupExpanded(gid, open);
+        var collapsed = summary.classList.contains('collapsed');
+        setTableGroupExpanded(gid, !collapsed);
     });
 
-    // Clicking a table group row toggles the group.
+    // Clicking a table group row toggles only the table.
     document.querySelectorAll('tr.table-group-summary').forEach(function(summary) {
         summary.addEventListener('click', function() {
             var gid = this.dataset.groupId;
-            var det = document.querySelector('details.gantt-group-block[data-group-id="' + gid + '"]');
-            var nowOpen = !(det && det.open);
-            setGroupExpanded(gid, nowOpen);
+            var isCollapsed = this.classList.contains('collapsed');
+            setTableGroupExpanded(gid, isCollapsed);
         });
     });
 
-    // Native <details> toggle on the Gantt side: sync the table.
+    // Native <details> toggle on the Gantt side affects only Gantt.
     document.querySelectorAll('details.gantt-group-block').forEach(function(det) {
         det.addEventListener('toggle', function() {
-            var gid = this.dataset.groupId;
-            setGroupExpanded(gid, this.open);
+            setGanttGroupExpanded(this.dataset.groupId, this.open);
         });
     });
 
-    // Expand all / Collapse all.
-    document.querySelectorAll('.js-expand-all').forEach(function(btn) {
+    // Expand all / Collapse all — each button only affects its own card.
+    document.querySelectorAll('.js-gantt-expand-all').forEach(function(btn) {
         btn.addEventListener('click', function() {
             document.querySelectorAll('details.gantt-group-block').forEach(function(d) { d.open = true; });
-            document.querySelectorAll('tr.table-group-summary').forEach(function(s) { setGroupExpanded(s.dataset.groupId, true); });
         });
     });
-    document.querySelectorAll('.js-collapse-all').forEach(function(btn) {
+    document.querySelectorAll('.js-gantt-collapse-all').forEach(function(btn) {
         btn.addEventListener('click', function() {
             document.querySelectorAll('details.gantt-group-block').forEach(function(d) { d.open = false; });
-            document.querySelectorAll('tr.table-group-summary').forEach(function(s) { setGroupExpanded(s.dataset.groupId, false); });
         });
     });
+    document.querySelectorAll('.js-table-expand-all').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('tr.table-group-summary').forEach(function(s) {
+                setTableGroupExpanded(s.dataset.groupId, true);
+            });
+        });
+    });
+    document.querySelectorAll('.js-table-collapse-all').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('tr.table-group-summary').forEach(function(s) {
+                setTableGroupExpanded(s.dataset.groupId, false);
+            });
+        });
+    });
+
+    // --- Bulk edit / Save All ---
+    var taskTable = document.getElementById('task-table');
+    var bulkToggle = document.getElementById('bulkEditToggle');
+    var bulkSave = document.getElementById('bulkSaveBtn');
+    var bulkCancel = document.getElementById('bulkCancelBtn');
+    var taskFieldSelectors = [
+        '.edit-name', '.edit-assigned', '.edit-sla-days', '.edit-sla-type',
+        '.edit-comp-date', '.edit-comments', '.edit-group-id',
+    ];
+
+    function bulkEditSnapshot() {
+        // Capture each row's current edit-mode input values so we can later tell
+        // which rows the user actually changed (and skip the rest on Save).
+        document.querySelectorAll('#task-table tr[id^="task-row-"]').forEach(function(row) {
+            taskFieldSelectors.forEach(function(sel) {
+                var el = row.querySelector(sel);
+                if (el) el.dataset.initial = el.value;
+            });
+        });
+    }
+
+    function enterBulkEdit() {
+        // Make all rows show their edit-mode UI without disturbing per-row state.
+        document.body.classList.add('js-bulk-editing');
+        // Force-show all rows (including those hidden by collapsed groups) so the
+        // user can edit any row. Group state is restored on Cancel.
+        document.querySelectorAll('#task-table tr[data-group-row]').forEach(function(r) {
+            r.dataset.bulkPrevDisplay = r.style.display || '';
+            r.style.display = '';
+        });
+        bulkEditSnapshot();
+        bulkToggle.style.display = 'none';
+        bulkSave.style.display = '';
+        bulkCancel.style.display = '';
+    }
+
+    function exitBulkEdit(restoreRows) {
+        document.body.classList.remove('js-bulk-editing');
+        if (restoreRows) {
+            // Reload the page so the server-side group expand/collapse state returns.
+            location.reload();
+            return;
+        }
+        document.querySelectorAll('#task-table tr[data-group-row]').forEach(function(r) {
+            r.style.display = r.dataset.bulkPrevDisplay || '';
+            delete r.dataset.bulkPrevDisplay;
+        });
+        bulkToggle.style.display = '';
+        bulkSave.style.display = 'none';
+        bulkCancel.style.display = 'none';
+    }
+
+    if (bulkToggle) {
+        bulkToggle.addEventListener('click', enterBulkEdit);
+    }
+    if (bulkCancel) {
+        bulkCancel.addEventListener('click', function() { exitBulkEdit(true); });
+    }
+    if (bulkSave) {
+        bulkSave.addEventListener('click', function() {
+            // Collect rows where any tracked field differs from its initial value.
+            var updates = [];
+            document.querySelectorAll('#task-table tr[id^="task-row-"]').forEach(function(row) {
+                var id = row.id.replace(/^task-row-/, '');
+                var dirty = false;
+                var payload = { id: id };
+                taskFieldSelectors.forEach(function(sel) {
+                    var el = row.querySelector(sel);
+                    if (!el) return;
+                    var name = sel.replace(/^\.edit-/, '');
+                    var cur = el.value;
+                    payload[name] = cur;
+                    if ((el.dataset.initial || '') !== cur) dirty = true;
+                });
+                if (dirty) updates.push(payload);
+            });
+            if (!updates.length) {
+                // Nothing to save — just exit.
+                exitBulkEdit(true);
+                return;
+            }
+            bulkSave.disabled = true;
+            bulkSave.textContent = 'Saving…';
+            fetch('/task/bulk-save/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrftoken,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                body: JSON.stringify({ updates: updates }),
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                bulkSave.disabled = false;
+                bulkSave.textContent = 'Save All';
+                if (data && data.ok) location.reload();
+                else { alert('Bulk save failed: ' + ((data && data.error) || 'unknown')); }
+            }).catch(function(err) {
+                bulkSave.disabled = false;
+                bulkSave.textContent = 'Save All';
+                alert('Bulk save failed: ' + err);
+            });
+        });
+    }
 })();
 </script>
 {% endblock %}
