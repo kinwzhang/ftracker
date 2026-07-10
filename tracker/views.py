@@ -4,7 +4,8 @@ import json
 from datetime import date, timedelta
 
 from django.contrib import messages
-from django.db.models import Count, Q
+from django.db import transaction
+from django.db.models import Count, F, Max, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render, get_object_or_404
 from django.template.loader import render_to_string
@@ -423,15 +424,64 @@ def template_list(request):
     return render(request, "tracker/template_list.html", {"templates": templates})
 
 
+def _parse_int_field(value, default=None):
+    """Return int(value) or default if value is missing/blank/non-numeric."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _assign_template_sort_order(requested_order, exclude_id=None):
+    """Pick a sort_order for a new/edited template, shifting existing rows if needed.
+
+    Rules:
+      * None / blank / <= 0  -> append at the end (max(existing)+1, or 1).
+      * Otherwise, if some other template already has that order, every template
+        with sort_order >= requested_order is shifted up by 1, then the new row
+        lands at requested_order.
+      * If `exclude_id` is given, that row is excluded from the collision check
+        (so editing a row to its own current order is a no-op).
+
+    Returns ``(actual_order, shifted_count)`` and runs inside an atomic block.
+    """
+    with transaction.atomic():
+        if requested_order is None or requested_order <= 0:
+            current_max = (
+                TaskTemplate.objects.aggregate(m=Max("sort_order"))["m"] or 0
+            )
+            requested_order = current_max + 1 if current_max >= 1 else 1
+
+        collision = TaskTemplate.objects.filter(sort_order=requested_order)
+        if exclude_id is not None:
+            collision = collision.exclude(id=exclude_id)
+        if collision.exists():
+            shift_qs = TaskTemplate.objects.filter(sort_order__gte=requested_order)
+            if exclude_id is not None:
+                shift_qs = shift_qs.exclude(id=exclude_id)
+            shifted = shift_qs.update(sort_order=F("sort_order") + 1)
+            return requested_order, shifted
+        return requested_order, 0
+
+
 def template_add(request):
     if request.method == "POST":
+        requested = _parse_int_field(request.POST.get("sort_order"))
+        actual, shifted = _assign_template_sort_order(requested)
         TaskTemplate.objects.create(
             task_name=request.POST["task_name"],
             assigned_to=request.POST["assigned_to"],
             sla_days=int(request.POST["sla_days"]),
             sla_type=request.POST["sla_type"],
-            sort_order=int(request.POST.get("sort_order", 0)),
+            sort_order=actual,
         )
+        if shifted:
+            messages.info(
+                request,
+                f"Reordered {shifted} template(s) to make room for order {actual}.",
+            )
         messages.success(request, "Template added.")
         return redirect("template_list")
     return render(request, "tracker/template_form.html")
@@ -444,8 +494,15 @@ def template_edit(request, template_id):
         tmpl.assigned_to = request.POST["assigned_to"]
         tmpl.sla_days = int(request.POST["sla_days"])
         tmpl.sla_type = request.POST["sla_type"]
-        tmpl.sort_order = int(request.POST.get("sort_order", 0))
+        requested = _parse_int_field(request.POST.get("sort_order"))
+        actual, shifted = _assign_template_sort_order(requested, exclude_id=tmpl.id)
+        tmpl.sort_order = actual
         tmpl.save()
+        if shifted:
+            messages.info(
+                request,
+                f"Reordered {shifted} template(s) to make room for order {actual}.",
+            )
         messages.success(request, "Template updated.")
         return redirect("template_list")
     return render(request, "tracker/template_form.html", {"tmpl": tmpl})
@@ -458,10 +515,19 @@ def template_inline_save(request, template_id):
     tmpl.assigned_to = request.POST.get("assigned_to", tmpl.assigned_to)
     tmpl.sla_days = int(request.POST.get("sla_days", tmpl.sla_days))
     tmpl.sla_type = request.POST.get("sla_type", tmpl.sla_type)
-    tmpl.sort_order = int(request.POST.get("sort_order", tmpl.sort_order))
+    requested = _parse_int_field(
+        request.POST.get("sort_order"), default=tmpl.sort_order
+    )
+    actual, shifted = _assign_template_sort_order(requested, exclude_id=tmpl.id)
+    tmpl.sort_order = actual
     tmpl.save()
+    if shifted and request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        messages.info(
+            request,
+            f"Reordered {shifted} template(s) to make room for order {actual}.",
+        )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"ok": True})
+        return JsonResponse({"ok": True, "sort_order": actual})
     return redirect("template_list")
 
 
@@ -591,15 +657,19 @@ def template_bulk_upload(request):
     _, records, warnings = _parse_bulk_csv(csv_text)
 
     created = 0
-    for record in records:
-        TaskTemplate.objects.create(
-            task_name=record["task_name"],
-            assigned_to=record["assigned_to"],
-            sla_days=record["sla_days"],
-            sla_type=record["sla_type"],
-            sort_order=record.get("sort_order", 0),
-        )
-        created += 1
+    total_shifted = 0
+    with transaction.atomic():
+        for record in records:
+            actual, shifted = _assign_template_sort_order(record.get("sort_order"))
+            total_shifted += shifted
+            TaskTemplate.objects.create(
+                task_name=record["task_name"],
+                assigned_to=record["assigned_to"],
+                sla_days=record["sla_days"],
+                sla_type=record["sla_type"],
+                sort_order=actual,
+            )
+            created += 1
 
     if created:
         messages.success(
@@ -607,6 +677,11 @@ def template_bulk_upload(request):
             f"Bulk upload from {source}: created {created} template(s)."
             + (f" {len(warnings)} warning(s)." if warnings else ""),
         )
+        if total_shifted:
+            messages.info(
+                request,
+                f"Reordered {total_shifted} template(s) to accommodate unique sort orders.",
+            )
     else:
         messages.error(
             request,
