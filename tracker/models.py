@@ -1,6 +1,18 @@
 from django.db import models
 
 
+class Group(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    sort_order = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
 class Task(models.Model):
     class SLAType(models.TextChoices):
         WORKING_DAY = "Working Day", "Working Day"
@@ -15,6 +27,13 @@ class Task(models.Model):
     completion_date = models.DateField(null=True, blank=True)
     comments = models.TextField(blank=True, default="")
     month = models.DateField()
+    group = models.ForeignKey(
+        Group,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tasks",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -35,6 +54,13 @@ class TaskTemplate(models.Model):
     sla_days = models.IntegerField()
     sla_type = models.CharField(max_length=20, choices=SLAType.choices)
     sort_order = models.IntegerField(default=0)
+    group = models.ForeignKey(
+        Group,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="templates",
+    )
 
     class Meta:
         ordering = ["sort_order", "task_name"]
