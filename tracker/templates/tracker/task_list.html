@@ -7,14 +7,20 @@
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.path }}">
         <div class="col-auto">
-            <input type="number" name="year" value="{{ month.year }}" class="form-control form-control-sm" style="width:85px" min="2020" max="2040">
+            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Previous month" onclick="stepMonth(this, -1)">‹ Prev</button>
         </div>
         <div class="col-auto">
-            <select name="month" class="form-select form-select-sm">
+            <input type="number" name="year" value="{{ month.year }}" class="form-control form-control-sm js-month-year" style="width:85px" min="2020" max="2040">
+        </div>
+        <div class="col-auto">
+            <select name="month" class="form-select form-select-sm js-month-select">
                 {% for m in months %}
                 <option value="{{ m }}" {% if month.month == m %}selected{% endif %}>{{ m }}</option>
                 {% endfor %}
             </select>
+        </div>
+        <div class="col-auto">
+            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Next month" onclick="stepMonth(this, 1)">Next ›</button>
         </div>
         <div class="col-auto">
             <button type="submit" class="btn btn-sm btn-primary">Go</button>
@@ -192,6 +198,28 @@
         </form>
     </div>
 </div>
+
+<script>
+function stepMonth(btn, delta) {
+    var form = btn.closest('form');
+    var yearInput = form.querySelector('.js-month-year');
+    var monthSelect = form.querySelector('.js-month-select');
+    var year = parseInt(yearInput.value, 10);
+    var month = parseInt(monthSelect.value, 10);
+    month += delta;
+    if (month < 1) { month = 12; year -= 1; }
+    if (month > 12) { month = 1; year += 1; }
+    yearInput.value = year;
+    // Set the matching <option> selected so the select reflects the new value.
+    for (var i = 0; i < monthSelect.options.length; i++) {
+        if (parseInt(monthSelect.options[i].value, 10) === month) {
+            monthSelect.selectedIndex = i;
+            break;
+        }
+    }
+    form.submit();
+}
+</script>
 
 <script>
 (function() {
