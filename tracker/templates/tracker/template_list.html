@@ -1,0 +1,164 @@
+{% extends 'tracker/base.html' %}
+{% block content %}
+<h3 class="mb-3">Task Templates</h3>
+<p class="text-muted" style="margin-top:-8px;">Templates are used to generate tasks for a new month via "Generate Next Month".</p>
+
+<div class="mb-3 d-flex gap-2">
+    <a href="{% url 'template_add' %}" class="btn btn-primary btn-sm px-3">+ Add Task</a>
+    <button type="button" class="btn btn-outline-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#bulkUploadModal">
+        Bulk Upload
+    </button>
+</div>
+
+<div class="glass-card">
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Order</th>
+                    <th>Task Name</th>
+                    <th>Assigned To</th>
+                    <th>SLA Days</th>
+                    <th>SLA Type</th>
+                    <th style="width:160px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tmpl in templates %}
+                {% with st=tmpl.sla_type %}
+                <tr id="tmpl-row-{{ tmpl.id }}">
+                    <td>
+                        <span class="view-mode">{{ tmpl.sort_order }}</span>
+                        <input type="number" class="edit-mode form-control form-control-sm edit-order" value="{{ tmpl.sort_order }}" style="display:none;width:60px;">
+                    </td>
+                    <td>
+                        <span class="view-mode">{{ tmpl.task_name }}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-tname" value="{{ tmpl.task_name }}" style="display:none;">
+                    </td>
+                    <td>
+                        <span class="view-mode">{{ tmpl.assigned_to }}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ tmpl.assigned_to }}" style="display:none;">
+                    </td>
+                    <td>
+                        <span class="view-mode">{{ tmpl.sla_days }}</span>
+                        <input type="number" class="edit-mode form-control form-control-sm edit-sla-days" value="{{ tmpl.sla_days }}" min="0" style="display:none;width:80px;">
+                    </td>
+                    <td>
+                        <span class="view-mode">{% if st == "Working Day" or st == "Business Day" %}WD{% else %}CD{% endif %}</span>
+                        <select class="edit-mode form-select form-select-sm edit-sla-type" style="display:none;width:140px;">
+                            <option value="Working Day" {% if st == "Working Day" or st == "Business Day" %}selected{% endif %}>Working Day</option>
+                            <option value="Calendar Day" {% if st == "Calendar Day" %}selected{% endif %}>Calendar Day</option>
+                        </select>
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-secondary view-mode edit-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Edit</button>
+                        <span class="edit-mode" style="display:none;">
+                            <button class="btn btn-sm btn-primary save-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Save</button>
+                            <button class="btn btn-sm btn-outline-secondary cancel-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Cancel</button>
+                        </span>
+                        <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete template {{ tmpl.task_name }}?')">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endwith %}
+                {% empty %}
+                <tr><td colspan="6" class="text-center text-muted py-4">No templates. Add one to auto-generate monthly tasks.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+(function() {
+    function getCookie(name) {
+        let c = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+        return c ? c.pop() : '';
+    }
+    const csrftoken = getCookie('csrftoken');
+
+    document.querySelectorAll('.edit-tmpl-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var row = this.closest('tr');
+            row.querySelectorAll('.view-mode').forEach(function(el) { el.style.display = 'none'; });
+            row.querySelectorAll('.edit-mode').forEach(function(el) { el.style.display = ''; });
+        });
+    });
+
+    document.querySelectorAll('.cancel-tmpl-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var row = this.closest('tr');
+            row.querySelectorAll('.edit-mode').forEach(function(el) { el.style.display = 'none'; });
+            row.querySelectorAll('.view-mode').forEach(function(el) { el.style.display = ''; });
+        });
+    });
+
+    document.querySelectorAll('.save-tmpl-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var tmplId = this.dataset.tmplId;
+            var row = document.getElementById('tmpl-row-' + tmplId);
+            var formData = new URLSearchParams();
+            formData.append('task_name', row.querySelector('.edit-tname').value);
+            formData.append('assigned_to', row.querySelector('.edit-assigned').value);
+            formData.append('sla_days', row.querySelector('.edit-sla-days').value);
+            formData.append('sla_type', row.querySelector('.edit-sla-type').value);
+            formData.append('sort_order', row.querySelector('.edit-order').value);
+
+            fetch('/templates/' + tmplId + '/inline-save/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrftoken, 'X-Requested-With': 'XMLHttpRequest'},
+                body: formData,
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                if (data.ok) location.reload();
+            });
+        });
+    });
+})();
+</script>
+
+<div class="modal fade" id="bulkUploadModal" tabindex="-1" aria-labelledby="bulkUploadModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content glass-card">
+            <form method="post" action="{% url 'template_bulk_upload' %}" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="modal-header">
+                    <h5 class="modal-title" id="bulkUploadModalLabel">Bulk Upload Templates</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small mb-3">
+                        CSV columns (header row optional): <code>task_name, assigned_to, sla_days, sla_type, sort_order</code>.
+                        <code>sla_type</code> must be <code>Working Day</code> or <code>Calendar Day</code>.
+                    </p>
+                    <ul class="nav nav-pills nav-sm mb-3" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button type="button" class="nav-link active" id="bulk-tab-file" data-bs-toggle="pill" data-bs-target="#bulk-pane-file" role="tab" aria-controls="bulk-pane-file" aria-selected="true">
+                                Upload CSV file
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button type="button" class="nav-link" id="bulk-tab-paste" data-bs-toggle="pill" data-bs-target="#bulk-pane-paste" role="tab" aria-controls="bulk-pane-paste" aria-selected="false">
+                                Paste CSV
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="bulk-pane-file" role="tabpanel" aria-labelledby="bulk-tab-file">
+                            <input type="file" name="csv_file" accept=".csv,text/csv" class="form-control" id="bulk-csv-file">
+                        </div>
+                        <div class="tab-pane fade" id="bulk-pane-paste" role="tabpanel" aria-labelledby="bulk-tab-paste">
+                            <textarea name="csv_text" class="form-control" rows="8" placeholder="task_name,assigned_to,sla_days,sla_type,sort_order&#10;Monthly report,Alice,3,Working Day,1&#10;Backup check,Bob,1,Calendar Day,2" id="bulk-csv-text"></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm">Upload</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

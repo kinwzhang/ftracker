@@ -1,0 +1,105 @@
+{% extends 'tracker/base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h3>Dashboard - {{ month|date:"F Y" }}</h3>
+    <form method="post" action="{% url 'set_month' %}" class="row g-2 align-items-center">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.path }}">
+        <div class="col-auto">
+            <input type="number" name="year" value="{{ month.year }}" class="form-control form-control-sm" style="width:85px" min="2020" max="2040">
+        </div>
+        <div class="col-auto">
+            <select name="month" class="form-select form-select-sm">
+                {% for m in months %}
+                <option value="{{ m }}" {% if month.month == m %}selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-sm btn-primary">Go</button>
+        </div>
+    </form>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="stat-card glass-card text-center">
+            <p class="stat-number" style="color:#6366f1;">{{ total }}</p>
+            <p class="stat-label" style="color:#4a4a6a;">Total Tasks</p>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card glass-success text-center">
+            <p class="stat-number">{{ completed }}</p>
+            <p class="stat-label">Completed</p>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card glass-warning text-center">
+            <p class="stat-number">{{ pending }}</p>
+            <p class="stat-label">Pending</p>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="stat-card glass-danger text-center">
+            <p class="stat-number">{{ overdue }}</p>
+            <p class="stat-label">Overdue</p>
+        </div>
+    </div>
+</div>
+
+<div class="glass-card mb-4">
+    <div class="card-header">Completion Rate</div>
+    <div class="card-body">
+        <div class="progress" style="height:28px;">
+            <div class="progress-bar bg-success" style="width:{{ completion_rate }}%;">{{ completion_rate }}%</div>
+        </div>
+    </div>
+</div>
+
+<div class="glass-card mb-4">
+    <div class="card-header">Monthly Trend (Last 6 Months)</div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead><tr><th>Month</th><th>Total</th><th>Completed</th><th>Rate</th></tr></thead>
+            <tbody>
+                {% for m in months_data %}
+                <tr>
+                    <td>{{ m.label }}</td>
+                    <td>{{ m.total }}</td>
+                    <td>{{ m.completed }}</td>
+                    <td style="width:200px;">
+                        <div class="progress" style="height:20px;">
+                            <div class="progress-bar bg-success" style="width:{{ m.rate }}%;">{{ m.rate }}%</div>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-center text-muted py-3">No data.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="glass-card">
+    <div class="card-header">Audit Trail</div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr><th style="width:140px;">Timestamp</th><th>Message</th></tr>
+            </thead>
+            <tbody>
+                {% for log in audit_logs %}
+                <tr>
+                    <td class="text-nowrap">{{ log.timestamp|date:"Y-m-d H:i" }}</td>
+                    <td>{{ log.readable_message }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="2" class="text-center text-muted py-3">No audit logs yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

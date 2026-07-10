@@ -1,0 +1,1 @@
+every file should be named with yyyymmdd_type_mainthesis.md, as the date of creation, followed by a descriptive name that indicates the content or purpose of the file.

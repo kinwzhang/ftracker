@@ -1,0 +1,84 @@
+{% extends 'tracker/base.html' %}
+{% block content %}
+<h3 class="mb-3">{% if task %}Edit Task{% else %}Add Task{% endif %}</h3>
+
+<div class="glass-card mb-4">
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label fw500">Task Name</label>
+                    <input type="text" name="task_name" class="form-control" value="{{ task.task_name|default:'' }}" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label fw500">Assigned To</label>
+                    <input type="text" name="assigned_to" class="form-control" value="{{ task.assigned_to|default:'' }}" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw500">SLA (Days)</label>
+                    <input type="number" name="sla_days" class="form-control" value="{{ task.sla_days|default:'0' }}" min="0" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw500">SLA Type</label>
+                        <select name="sla_type" class="form-select">
+                                <option value="Working Day" {% if task.sla_type == 'Working Day' or task.sla_type == 'Business Day' %}selected{% endif %}>Working Day</option>
+                                <option value="Calendar Day" {% if task.sla_type == 'Calendar Day' %}selected{% endif %}>Calendar Day</option>
+                            </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw500">Finished</label>
+                    <div class="form-check mt-2">
+                        <input type="checkbox" name="finished" class="form-check-input" {% if task.finished %}checked{% endif %}>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label fw500">Completion Date</label>
+                    <input type="date" name="completion_date" class="form-control" value="{{ task.completion_date|date:'Y-m-d'|default:'' }}">
+                </div>
+                <div class="col-md-12">
+                    <label class="form-label fw500">Comments</label>
+                    <textarea name="comments" class="form-control" rows="3">{{ task.comments|default:'' }}</textarea>
+                </div>
+            </div>
+            <p class="text-muted small">Month: {{ month|date:"F Y" }} | Scheduled date is calculated automatically based on SLA.</p>
+            <button type="submit" class="btn btn-primary px-4">Save</button>
+            <a href="{% url 'task_list' %}" class="btn btn-outline-secondary px-4">Cancel</a>
+        </form>
+    </div>
+</div>
+
+{% if not task and templates %}
+<div class="glass-card">
+    <div class="card-header">Quick-add from template</div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead><tr><th>Task Name</th><th>Assigned To</th><th>SLA Days</th><th>SLA Type</th><th></th></tr></thead>
+            <tbody>
+                {% for t in templates %}
+                <tr>
+                    <td>{{ t.task_name }}</td>
+                    <td>{{ t.assigned_to }}</td>
+                    <td>{{ t.sla_days }}</td>
+                    <td>{{ t.sla_type }}</td>
+                    <td><button class="btn btn-sm btn-outline-primary" onclick="fillTemplate({{ t.id }})">Use</button></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+<script>
+    const templates = {{ templates_json|safe }};
+    function fillTemplate(id) {
+        const t = templates.find(x => x.id === id);
+        if (t) {
+            document.querySelector('[name=task_name]').value = t.task_name;
+            document.querySelector('[name=assigned_to]').value = t.assigned_to;
+            document.querySelector('[name=sla_days]').value = t.sla_days;
+            document.querySelector('[name=sla_type]').value = t.sla_type;
+        }
+    }
+</script>
+{% endif %}
+{% endblock %}

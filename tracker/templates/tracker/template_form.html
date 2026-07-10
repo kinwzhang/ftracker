@@ -1,0 +1,39 @@
+{% extends 'tracker/base.html' %}
+{% block content %}
+<h3 class="mb-3">{% if tmpl %}Edit Template{% else %}Add Template{% endif %}</h3>
+
+<div class="glass-card">
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label fw500">Task Name</label>
+                    <input type="text" name="task_name" class="form-control" value="{{ tmpl.task_name|default:'' }}" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label fw500">Assigned To</label>
+                    <input type="text" name="assigned_to" class="form-control" value="{{ tmpl.assigned_to|default:'' }}" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label fw500">SLA Days</label>
+                    <input type="number" name="sla_days" class="form-control" value="{{ tmpl.sla_days|default:'0' }}" min="0" required>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label fw500">SLA Type</label>
+                    <select name="sla_type" class="form-select">
+                        <option value="Working Day" {% if tmpl.sla_type == 'Working Day' or tmpl.sla_type == 'Business Day' %}selected{% endif %}>Working Day</option>
+                        <option value="Calendar Day" {% if tmpl.sla_type == 'Calendar Day' %}selected{% endif %}>Calendar Day</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label fw500">Sort Order</label>
+                    <input type="number" name="sort_order" class="form-control" value="{{ tmpl.sort_order|default:'0' }}">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary px-4">Save</button>
+            <a href="{% url 'template_list' %}" class="btn btn-outline-secondary px-4">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}
