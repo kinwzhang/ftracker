@@ -42,14 +42,16 @@ body {
 .navbar.glass .nav-link { color: rgba(255,255,255,0.75); font-weight: 500; font-size: 0.9rem; border-radius: 8px; padding: 6px 14px; margin: 0 2px; transition: all 0.15s; }
 .navbar.glass .nav-link:hover, .navbar.glass .nav-link.active { color: #fff; background: rgba(255,255,255,0.1); }
 .gantt-chart { overflow-x: auto; position: relative; }
+.gantt-canvas { display: inline-block; min-width: 100%; }
 .gantt-bar { height: 24px; border-radius: 6px; background: linear-gradient(135deg, #6366f1, #818cf8); min-width: 4px; position: absolute; top: 1px; height: 22px; border-radius: 6px; box-shadow: 0 2px 6px rgba(99,102,241,0.3); }
 .gantt-bar.completed { background: linear-gradient(135deg, #10b981, #34d399); box-shadow: 0 2px 6px rgba(16,185,129,0.3); }
 .gantt-bar.overdue { background: linear-gradient(135deg, #ef4444, #f87171); box-shadow: 0 2px 6px rgba(239,68,68,0.3); }
+.gantt-bar.group { height: 14px; top: 5px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
 .gantt-row { display: flex; align-items: center; margin-bottom: 3px; }
 .gantt-label { width: 200px; flex-shrink: 0; font-size: 0.82rem; font-weight: 500; color: #1a1a2e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
-.gantt-track { position: relative; flex-grow: 1; height: 24px; background: rgba(0,0,0,0.04); border-radius: 6px; }
+.gantt-track { position: relative; height: 24px; background: rgba(0,0,0,0.04); border-radius: 6px; }
 .day-header { display: flex; }
-.day-cell { flex: 1; text-align: center; font-size: 0.7rem; font-weight: 600; color: #4a4a6a; border-left: 1px solid rgba(0,0,0,0.05); padding: 2px 0; }
+.day-cell { flex: 0 0 28px; text-align: center; font-size: 0.7rem; font-weight: 600; color: #4a4a6a; border-left: 1px solid rgba(0,0,0,0.05); padding: 2px 0; }
 .day-cell.weekend { color: #ef4444; }
 .day-cell.today { color: #6366f1; font-weight: 700; }
 .today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: #6366f1; z-index: 5; opacity: 0.6; }

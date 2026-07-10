@@ -51,6 +51,8 @@ def task_list(request):
 
     gantt_tasks = []
     pixel_per_day = 28
+    canvas_width = total_days * pixel_per_day
+    canvas_total_width = 200 + canvas_width
     today_offset = None
     if month <= today <= date(month.year, month.month, total_days):
         today_offset = (today - month).days * pixel_per_day
@@ -80,6 +82,8 @@ def task_list(request):
         "months": list(range(1, 13)),
         "days_in_month": days_in_month,
         "gantt_tasks": gantt_tasks,
+        "canvas_width": canvas_width,
+        "canvas_total_width": canvas_total_width,
         "total_days": total_days,
         "today": today,
         "today_offset": today_offset,

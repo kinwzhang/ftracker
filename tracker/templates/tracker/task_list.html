@@ -57,27 +57,29 @@
 <div class="glass-card mb-4">
     <div class="card-header">Gantt Chart</div>
     <div class="card-body gantt-chart">
-        <div class="day-header" style="margin-left: 200px;">
-            {% for d in days_in_month %}
-            <div class="day-cell {% if d.weekday == 'Sat' or d.weekday == 'Sun' %}weekend{% endif %} {% if d.date == today %}today{% endif %}" style="min-width:28px;">
-                {{ d.date|date:"j" }}<br><span style="font-size:0.6rem;">{{ d.weekday|slice:":1" }}</span>
-            </div>
-            {% endfor %}
-        </div>
-        <div style="margin-top:6px; position:relative;">
-            {% if today_offset is not None %}
-            <div class="today-line" style="left: {{ today_offset|add:200 }}px;"></div>
-            {% endif %}
-            {% for gt in gantt_tasks %}
-            <div class="gantt-row">
-                <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
-                <div class="gantt-track">
-                    <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
-                         style="left: {{ gt.start_offset }}px; width: {{ gt.duration }}px;"
-                         title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
+        <div class="gantt-canvas" style="width: {{ canvas_total_width }}px;">
+            <div class="day-header" style="margin-left: 200px; width: {{ canvas_width }}px;">
+                {% for d in days_in_month %}
+                <div class="day-cell {% if d.weekday == 'Sat' or d.weekday == 'Sun' %}weekend{% endif %} {% if d.date == today %}today{% endif %}">
+                    {{ d.date|date:"j" }}<br><span style="font-size:0.6rem;">{{ d.weekday|slice:":1" }}</span>
                 </div>
+                {% endfor %}
             </div>
-            {% endfor %}
+            <div style="margin-top:6px; position:relative;">
+                {% if today_offset is not None %}
+                <div class="today-line" style="left: {{ today_offset|add:200 }}px;"></div>
+                {% endif %}
+                {% for gt in gantt_tasks %}
+                <div class="gantt-row">
+                    <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
+                    <div class="gantt-track" style="width: {{ canvas_width }}px;">
+                        <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
+                             style="left: {{ gt.start_offset }}px; width: {{ gt.duration }}px;"
+                             title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
         </div>
     </div>
 </div>
@@ -135,9 +137,9 @@
                         <span class="view-mode">{{ task.completion_date|date:"Y-m-d"|default:"-" }}</span>
                         <input type="date" class="edit-mode form-control form-control-sm edit-comp-date" value="{{ task.completion_date|date:'Y-m-d'|default:'' }}" style="display:none;">
                     </td>
-                    <td>
-                        <span class="view-mode">{{ task.comments|truncatechars:20 }}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-comments" value="{{ task.comments }}" style="display:none;">
+                    <td class="comment-cell" data-task-id="{{ task.id }}">
+                        <span class="view-mode comment-display" title="Click to edit">{% if task.comments %}{{ task.comments|truncatechars:20 }}{% else %}<span class="text-muted">(click to add)</span>{% endif %}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-comments comment-input" value="{{ task.comments }}" style="display:none;">
                     </td>
                     <td>
                         <button class="btn btn-sm btn-outline-secondary edit-btn view-mode" data-task-id="{{ task.id }}">Edit</button>
@@ -278,6 +280,79 @@
             row.querySelector('.delete-confirm').style.display = 'none';
             row.querySelector('.delete-btn').style.display = 'inline';
         });
+    });
+
+    // --- Quick comment edit: click cell to edit, Enter/blur to save, Esc to cancel ---
+    function isRowInFullEdit(row) {
+        // The Edit button uses .view-mode; if any .view-mode in the row is hidden, full-edit is active.
+        var btn = row.querySelector('.edit-btn');
+        return !btn || btn.style.display === 'none';
+    }
+
+    function enterCommentEdit(cell) {
+        if (isRowInFullEdit(cell.closest('tr'))) return;
+        var display = cell.querySelector('.comment-display');
+        var input = cell.querySelector('.comment-input');
+        display.style.display = 'none';
+        input.style.display = '';
+        input.dataset.prev = input.value;
+        input.focus();
+        input.select();
+    }
+
+    function cancelCommentEdit(cell) {
+        var display = cell.querySelector('.comment-display');
+        var input = cell.querySelector('.comment-input');
+        input.value = input.dataset.prev || '';
+        input.style.display = 'none';
+        display.style.display = '';
+    }
+
+    function saveCommentEdit(cell) {
+        var input = cell.querySelector('.comment-input');
+        var display = cell.querySelector('.comment-display');
+        var taskId = cell.dataset.taskId;
+        var value = input.value;
+        // Nothing changed: just exit edit mode.
+        if (value === (input.dataset.prev || '')) {
+            input.style.display = 'none';
+            display.style.display = '';
+            return;
+        }
+        var formData = new URLSearchParams();
+        formData.append('comments', value);
+        fetch('/task/' + taskId + '/comment/', {
+            method: 'POST',
+            headers: {'X-CSRFToken': csrftoken, 'X-Requested-With': 'XMLHttpRequest'},
+            body: formData,
+        }).then(function(r) { return r.json(); }).then(function(data) {
+            if (data && data.ok) {
+                input.dataset.prev = data.comments;
+                // Re-render display: use server text, falling back to placeholder when empty.
+                display.innerHTML = data.comments
+                    ? (data.comments.length > 20 ? data.comments.slice(0, 20) + '…' : data.comments)
+                    : '<span class="text-muted">(click to add)</span>';
+                input.style.display = 'none';
+                display.style.display = '';
+            } else {
+                cancelCommentEdit(cell);
+            }
+        }).catch(function() { cancelCommentEdit(cell); });
+    }
+
+    document.querySelectorAll('.comment-cell').forEach(function(cell) {
+        cell.addEventListener('click', function(e) {
+            // Ignore clicks while the input is already visible (don't re-trigger from internal clicks).
+            var input = cell.querySelector('.comment-input');
+            if (input.style.display !== 'none') return;
+            enterCommentEdit(cell);
+        });
+        var input = cell.querySelector('.comment-input');
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancelCommentEdit(cell); }
+        });
+        input.addEventListener('blur', function() { saveCommentEdit(cell); });
     });
 })();
 </script>
