@@ -30,6 +30,15 @@
                     <label class="form-label fw500">Sort Order</label>
                     <input type="number" name="sort_order" class="form-control" value="{{ tmpl.sort_order|default:'0' }}">
                 </div>
+                <div class="col-md-6">
+                    <label class="form-label fw500">Group</label>
+                    <select name="group" class="form-select">
+                        <option value="">— Ungrouped —</option>
+                        {% for g in groups %}
+                        <option value="{{ g.id }}" {% if tmpl and tmpl.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
             <button type="submit" class="btn btn-primary px-4">Save</button>
             <a href="{% url 'template_list' %}" class="btn btn-outline-secondary px-4">Cancel</a>

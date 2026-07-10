@@ -13,7 +13,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .holidays import calculate_scheduled_date, hk_public_holidays, hk_public_holidays_named
-from .models import AuditLog, Task, TaskTemplate
+from .models import AuditLog, Group, Task, TaskTemplate
 
 
 def _get_current_month(request):
@@ -420,8 +420,13 @@ def export_html(request):
 # --- E2: Task Template management ---
 
 def template_list(request):
-    templates = TaskTemplate.objects.all()
-    return render(request, "tracker/template_list.html", {"templates": templates})
+    templates = TaskTemplate.objects.select_related("group").all()
+    groups = Group.objects.all()
+    return render(
+        request,
+        "tracker/template_list.html",
+        {"templates": templates, "groups": groups},
+    )
 
 
 def _parse_int_field(value, default=None):
@@ -476,6 +481,7 @@ def template_add(request):
             sla_days=int(request.POST["sla_days"]),
             sla_type=request.POST["sla_type"],
             sort_order=actual,
+            group_id=_parse_group_id(request.POST.get("group")),
         )
         if shifted:
             messages.info(
@@ -484,7 +490,11 @@ def template_add(request):
             )
         messages.success(request, "Template added.")
         return redirect("template_list")
-    return render(request, "tracker/template_form.html")
+    return render(
+        request,
+        "tracker/template_form.html",
+        {"groups": Group.objects.all()},
+    )
 
 
 def template_edit(request, template_id):
@@ -497,6 +507,7 @@ def template_edit(request, template_id):
         requested = _parse_int_field(request.POST.get("sort_order"))
         actual, shifted = _assign_template_sort_order(requested, exclude_id=tmpl.id)
         tmpl.sort_order = actual
+        tmpl.group_id = _parse_group_id(request.POST.get("group"))
         tmpl.save()
         if shifted:
             messages.info(
@@ -505,7 +516,11 @@ def template_edit(request, template_id):
             )
         messages.success(request, "Template updated.")
         return redirect("template_list")
-    return render(request, "tracker/template_form.html", {"tmpl": tmpl})
+    return render(
+        request,
+        "tracker/template_form.html",
+        {"tmpl": tmpl, "groups": Group.objects.all()},
+    )
 
 
 @require_POST
@@ -520,6 +535,8 @@ def template_inline_save(request, template_id):
     )
     actual, shifted = _assign_template_sort_order(requested, exclude_id=tmpl.id)
     tmpl.sort_order = actual
+    if "group" in request.POST:
+        tmpl.group_id = _parse_group_id(request.POST.get("group"))
     tmpl.save()
     if shifted and request.headers.get("X-Requested-With") != "XMLHttpRequest":
         messages.info(
@@ -527,7 +544,9 @@ def template_inline_save(request, template_id):
             f"Reordered {shifted} template(s) to make room for order {actual}.",
         )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        return JsonResponse({"ok": True, "sort_order": actual})
+        return JsonResponse(
+            {"ok": True, "sort_order": actual, "group_id": tmpl.group_id}
+        )
     return redirect("template_list")
 
 
@@ -537,6 +556,124 @@ def template_delete(request, template_id):
     tmpl.delete()
     messages.success(request, "Template deleted.")
     return redirect("template_list")
+
+
+# --- Group management ---
+
+def _parse_group_id(value):
+    """Return int(value), or None if blank/missing/non-numeric."""
+    if value in (None, "", "null", "None"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@require_POST
+def group_add(request):
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        messages.error(request, "Group name is required.")
+        return redirect("template_list")
+    if Group.objects.filter(name__iexact=name).exists():
+        messages.error(request, f"A group named '{name}' already exists.")
+        return redirect("template_list")
+    requested = _parse_int_field(request.POST.get("sort_order"))
+    actual, shifted = _assign_group_sort_order(requested)
+    group = Group.objects.create(name=name, sort_order=actual)
+    if shifted:
+        messages.info(
+            request,
+            f"Reordered {shifted} group(s) to make room for order {actual}.",
+        )
+    messages.success(request, f"Group '{group.name}' added.")
+    return redirect("template_list")
+
+
+@require_POST
+def group_edit(request, group_id):
+    group = get_object_or_404(Group, id=group_id)
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        messages.error(request, "Group name is required.")
+        return redirect("template_list")
+    if Group.objects.filter(name__iexact=name).exclude(id=group.id).exists():
+        messages.error(request, f"A group named '{name}' already exists.")
+        return redirect("template_list")
+    requested = _parse_int_field(request.POST.get("sort_order"), default=group.sort_order)
+    actual, shifted = _assign_group_sort_order(requested, exclude_id=group.id)
+    group.name = name
+    group.sort_order = actual
+    group.save()
+    if shifted:
+        messages.info(
+            request,
+            f"Reordered {shifted} group(s) to make room for order {actual}.",
+        )
+    messages.success(request, f"Group '{group.name}' updated.")
+    return redirect("template_list")
+
+
+@require_POST
+def group_inline_save(request, group_id):
+    group = get_object_or_404(Group, id=group_id)
+    name = (request.POST.get("name") or "").strip()
+    if name:
+        if Group.objects.filter(name__iexact=name).exclude(id=group.id).exists():
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                return JsonResponse({"ok": False, "error": "name_taken"}, status=400)
+            messages.error(request, f"A group named '{name}' already exists.")
+            return redirect("template_list")
+        group.name = name
+    requested = _parse_int_field(request.POST.get("sort_order"), default=group.sort_order)
+    actual, shifted = _assign_group_sort_order(requested, exclude_id=group.id)
+    group.sort_order = actual
+    group.save()
+    if shifted and request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        messages.info(
+            request,
+            f"Reordered {shifted} group(s) to make room for order {actual}.",
+        )
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return JsonResponse({"ok": True, "name": group.name, "sort_order": actual})
+    return redirect("template_list")
+
+
+@require_POST
+def group_delete(request, group_id):
+    group = get_object_or_404(Group, id=group_id)
+    template_count = group.templates.count()
+    task_count = group.tasks.count()
+    # on_delete=SET_NULL handles the FK unlink on delete, but we report counts
+    # up-front so the user understands the impact.
+    name = group.name
+    group.delete()
+    summary = f"Group '{name}' deleted."
+    if template_count or task_count:
+        summary += (
+            f" Unlinked {template_count} template(s) and {task_count} task(s)."
+        )
+    messages.success(request, summary)
+    return redirect("template_list")
+
+
+def _assign_group_sort_order(requested_order, exclude_id=None):
+    """Same shifting logic as templates, scoped to the Group model."""
+    with transaction.atomic():
+        if requested_order is None or requested_order <= 0:
+            current_max = Group.objects.aggregate(m=Max("sort_order"))["m"] or 0
+            requested_order = current_max + 1 if current_max >= 1 else 1
+        collision = Group.objects.filter(sort_order=requested_order)
+        if exclude_id is not None:
+            collision = collision.exclude(id=exclude_id)
+        if collision.exists():
+            shift_qs = Group.objects.filter(sort_order__gte=requested_order)
+            if exclude_id is not None:
+                shift_qs = shift_qs.exclude(id=exclude_id)
+            shifted = shift_qs.update(sort_order=F("sort_order") + 1)
+            return requested_order, shifted
+        return requested_order, 0
 
 
 # --- Bulk upload (CSV file or pasted text) ---
@@ -668,6 +805,7 @@ def template_bulk_upload(request):
                 sla_days=record["sla_days"],
                 sla_type=record["sla_type"],
                 sort_order=actual,
+                group_id=_parse_group_id(record.get("group_id")),
             )
             created += 1
 
