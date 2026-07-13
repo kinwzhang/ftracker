@@ -181,11 +181,13 @@ def task_list(request):
     groups_by_id = {g.id: g for g in Group.objects.all()}
 
     group_blocks = []
-    # Real groups first, ordered by (Group.sort_order, name).
+    # Real groups first, ordered by (completed→bottom, Group.sort_order, name).
+    # A group is "completed" when every task in it is finished.
     for gid, gtasks in sorted(
         grouped.items(),
         key=lambda kv: (
             1 if kv[0] is None else 0,
+            0 if any(not t.finished for t in kv[1]) else 1,
             groups_by_id[kv[0]].sort_order if kv[0] is not None else 0,
             groups_by_id[kv[0]].name if kv[0] is not None else "",
         ),

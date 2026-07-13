@@ -117,7 +117,7 @@
                         </div>
                     </summary>
                     {% for gt in block.gantt_tasks %}
-                    <div class="gantt-row">
+                    <div class="gantt-row" data-task-id="{{ gt.task.id }}">
                         <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
                         <div class="gantt-track">
                             <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
@@ -338,7 +338,6 @@ function stepMonth(btn, delta) {
         var finished = !!data.finished;
         var scheduledIso = row.dataset.scheduledDate;
         var todayIso = new Date().toISOString().slice(0, 10);
-        // Re-derive the row's status class from finished + scheduled_date.
         var newClass;
         if (finished) {
             newClass = 'row-completed';
@@ -349,11 +348,23 @@ function stepMonth(btn, delta) {
         }
         row.classList.remove('row-completed', 'row-overdue', 'row-pending');
         row.classList.add(newClass);
-        // Update the completion date cell. The view-mode span lives in the
-        // 6th <td> (Done, Task Name, Assigned To, SLA, Scheduled, Completed At).
         var compSpan = row.querySelectorAll('td')[5].querySelector('.view-mode');
         if (compSpan) {
             compSpan.textContent = data.completion_display || '-';
+        }
+        // Update the corresponding Gantt bar color.
+        var taskId = row.id.replace('task-row-', '');
+        var ganttRow = document.querySelector('.gantt-row[data-task-id="' + taskId + '"]');
+        if (ganttRow) {
+            var bar = ganttRow.querySelector('.gantt-bar');
+            if (bar) {
+                bar.classList.remove('completed', 'overdue');
+                if (finished) {
+                    bar.classList.add('completed');
+                } else if (scheduledIso < todayIso) {
+                    bar.classList.add('overdue');
+                }
+            }
         }
     }
 
@@ -373,7 +384,6 @@ function stepMonth(btn, delta) {
             else if (r.classList.contains('row-overdue')) counts.overdue++;
             else if (r.classList.contains('row-pending')) counts.pending++;
         });
-        // Dominant status mirrors the view helper: overdue > pending > completed.
         var status;
         if (counts.overdue > 0) status = 'overdue';
         else if (counts.pending > 0) status = 'pending';
@@ -388,11 +398,55 @@ function stepMonth(btn, delta) {
                 'status-overdue', 'status-pending', 'status-completed'
             );
             tableSummary.classList.add('status-' + status);
-            // Update each count span (or insert / remove it so 0-counts hide).
             updateCountSpans(
                 tableSummary.querySelector('.group-summary-counts'),
                 counts
             );
+            if (status === 'completed') {
+                var tbody = tableSummary.closest('tbody');
+                // Collect task rows first, before moving anything.
+                var taskRows = [];
+                var next = tableSummary.nextElementSibling;
+                while (next && !next.classList.contains('table-group-summary')) {
+                    taskRows.push(next);
+                    next = next.nextElementSibling;
+                }
+                // Move summary first, then task rows after it.
+                tbody.appendChild(tableSummary);
+                taskRows.forEach(function(r) { tbody.appendChild(r); });
+            } else {
+                // Move back before the first completed group.
+                var allSummaries = document.querySelectorAll(
+                    'tr.table-group-summary'
+                );
+                var insertBefore = null;
+                for (var i = 0; i < allSummaries.length; i++) {
+                    if (allSummaries[i].classList.contains('status-completed')) {
+                        insertBefore = allSummaries[i];
+                        break;
+                    }
+                }
+                var tbody = tableSummary.closest('tbody');
+                var next = tableSummary.nextElementSibling;
+                // Collect this group's task rows first.
+                var taskRows = [];
+                while (next && !next.classList.contains('table-group-summary')) {
+                    var after = next.nextElementSibling;
+                    taskRows.push(next);
+                    next = after;
+                }
+                // Remove from current position.
+                taskRows.forEach(function(r) { r.remove(); });
+                tableSummary.remove();
+                // Insert before the first completed group.
+                if (insertBefore) {
+                    tbody.insertBefore(tableSummary, insertBefore);
+                    taskRows.forEach(function(r) { tbody.insertBefore(r, insertBefore); });
+                } else {
+                    tbody.appendChild(tableSummary);
+                    taskRows.forEach(function(r) { tbody.appendChild(r); });
+                }
+            }
         }
 
         // --- Gantt group bar ---
@@ -406,9 +460,6 @@ function stepMonth(btn, delta) {
                     'status-overdue', 'status-pending', 'status-completed'
                 );
                 bar.classList.add('status-' + status);
-                // Hidden-by-default rules (status-overdue hides pending/completed,
-                // status-pending hides completed). The CSS uses .status-* on the
-                // bar, so changing the class re-evaluates those rules.
                 var label = bar.querySelector('.gantt-bar-label');
                 if (label) updateCountSpans(label, counts);
                 var title = bar.getAttribute('title');
@@ -420,6 +471,28 @@ function stepMonth(btn, delta) {
                             + counts.pending + ' in progress, '
                             + counts.completed + ' completed'
                     );
+                }
+            }
+            if (status === 'completed') {
+                var wrapper = details.parentElement;
+                wrapper.appendChild(details);
+            } else {
+                // Move back before the first completed group block.
+                var allDetails = document.querySelectorAll(
+                    'details.gantt-group-block'
+                );
+                var insertBefore = null;
+                for (var i = 0; i < allDetails.length; i++) {
+                    if (allDetails[i] !== details && allDetails[i].querySelector('summary').classList.contains('status-completed')) {
+                        insertBefore = allDetails[i];
+                        break;
+                    }
+                }
+                var wrapper = details.parentElement;
+                if (insertBefore) {
+                    wrapper.insertBefore(details, insertBefore);
+                } else {
+                    wrapper.appendChild(details);
                 }
             }
         }

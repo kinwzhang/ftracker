@@ -73,11 +73,10 @@ E5. In the Gantt chart, make the group bar:
   - color coded(matching color with task list items): if any iteam within the group is overdue, the group bar should be red; if all items are completed, the group bar should be green; if any item is pending, the group bar should be blue. Honor overdur > in progress > completed.
   - display information: "x items overdue[Heavy Red], y items pending[Heavy Blue], z items completed[Heavy Green]" on the group bar.
 E6. Add Expand all and Collapse all buttons in the task list
-B6. The date bar on the Gantt chart is not aligned with the task bars, it is now aligning with task items in the Gantt chart.
+B6. The date bar on the Gantt chart is not aligned with the task bars, it is now aligning with task items in the Gantt chart.B10. The Scheduled date for tasks with Calendar Day is not populating correct, which has skipped the public holiday. Calendar Day pin on the exact day regardless holiday or weekends.
 
 --- Enhancement and Bugs Round 5 ---
 B7. The Length of Group Bar should always be the length of the longest task within that group, and the color of the group bar should be based on the status of the group (completed, pending, overdue).
 B8. The Gant Chart and Task List is linked together on Expand all or Collaspe all. it is not necessary, just let them maintain their own status.
 B9. Whenever marking a task finished, it will expand the whole list. It is not necessary, just maintain Expand status.
 
-B10. The Scheduled date for tasks with Calendar Day is not populating correct, which has skipped the public holiday. Calendar Day pin on the exact day regardless holiday or weekends.
