@@ -34,8 +34,8 @@
                             <input type="number" class="edit-mode form-control form-control-sm edit-group-order" value="{{ g.sort_order }}" style="display:none;width:60px;">
                         </td>
                         <td>
-                            <span class="view-mode">{{ g.name }}</span>
-                            <input type="text" class="edit-mode form-control form-control-sm edit-group-name" value="{{ g.name }}" style="display:none;">
+                            <span class="view-mode">{{ g.name|escape }}</span>
+                            <input type="text" class="edit-mode form-control form-control-sm edit-group-name" value="{{ g.name|escape }}" style="display:none;">
                         </td>
                         <td>{{ g.templates.count }}</td>
                         <td>
@@ -44,7 +44,7 @@
                                 <button class="btn btn-sm btn-primary save-group-btn" data-group-id="{{ g.id }}">Save</button>
                                 <button class="btn btn-sm btn-outline-secondary cancel-group-btn" data-group-id="{{ g.id }}">Cancel</button>
                             </span>
-                            <form method="post" action="{% url 'group_delete' g.id %}" style="display:inline" onsubmit="return confirm('Delete group {{ g.name }}? Linked templates and tasks will be unlinked (not deleted).')">
+                            <form method="post" action="{% url 'group_delete' g.id %}" style="display:inline" onsubmit="return confirm('Delete this group? Linked templates and tasks will be unlinked (not deleted).')">
                                 {% csrf_token %}
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
                             </form>
@@ -99,12 +99,12 @@
                         <input type="number" class="edit-mode form-control form-control-sm edit-order" value="{{ tmpl.sort_order }}" style="display:none;width:60px;">
                     </td>
                     <td>
-                        <span class="view-mode">{{ tmpl.task_name }}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-tname" value="{{ tmpl.task_name }}" style="display:none;">
+                        <span class="view-mode">{{ tmpl.task_name|escape }}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-tname" value="{{ tmpl.task_name|escape }}" style="display:none;">
                     </td>
                     <td>
-                        <span class="view-mode">{{ tmpl.assigned_to }}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ tmpl.assigned_to }}" style="display:none;">
+                        <span class="view-mode">{{ tmpl.assigned_to|escape }}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ tmpl.assigned_to|escape }}" style="display:none;">
                     </td>
                     <td>
                         <span class="view-mode">{{ tmpl.sla_days }}</span>
@@ -118,18 +118,18 @@
                         </select>
                     </td>
                     <td>
-                        <span class="view-mode">{% if tmpl.group %}{{ tmpl.group.name }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
+                        <span class="view-mode">{% if tmpl.group %}{{ tmpl.group.name|escape }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
                         <select class="edit-mode form-select form-select-sm edit-group-id" style="display:none;">
                             <option value="">— Ungrouped —</option>
                             {% for g in groups %}
-                            <option value="{{ g.id }}" {% if tmpl.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                            <option value="{{ g.id }}" {% if tmpl.group_id == g.id %}selected{% endif %}>{{ g.name|escape }}</option>
                             {% endfor %}
                         </select>
                     </td>
                     <td class="actions-cell" style="white-space:nowrap;">
                         <span class="view-mode">
                             <button class="btn btn-sm btn-outline-secondary edit-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Edit</button>
-                            <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete template {{ tmpl.task_name }}?')">
+                            <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete this template?')">
                                 {% csrf_token %}
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
                             </form>
@@ -137,7 +137,7 @@
                         <span class="edit-mode" style="display:none;">
                             <button class="btn btn-sm btn-primary save-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Save</button>
                             <button class="btn btn-sm btn-outline-secondary cancel-tmpl-btn" data-tmpl-id="{{ tmpl.id }}">Cancel</button>
-                            <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete template {{ tmpl.task_name }}?')">
+                            <form method="post" action="{% url 'template_delete' tmpl.id %}" style="display:inline" onsubmit="return confirm('Delete this template?')">
                                 {% csrf_token %}
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
                             </form>

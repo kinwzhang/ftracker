@@ -358,7 +358,7 @@ def task_add(request):
     templates = TaskTemplate.objects.all()
     return render(request, "tracker/task_form.html", {
         "templates": templates,
-        "templates_json": json.dumps([{"id": t.id, "task_name": t.task_name, "assigned_to": t.assigned_to, "sla_days": t.sla_days, "sla_type": t.sla_type} for t in templates]),
+        "templates_json": [{"id": t.id, "task_name": t.task_name, "assigned_to": t.assigned_to, "sla_days": t.sla_days, "sla_type": t.sla_type} for t in templates],
         "month": _get_current_month(request),
         "groups": Group.objects.all(),
     })

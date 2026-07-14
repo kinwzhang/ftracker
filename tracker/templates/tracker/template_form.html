@@ -9,11 +9,11 @@
             <div class="row g-3 mb-3">
                 <div class="col-md-6">
                     <label class="form-label fw500">Task Name</label>
-                    <input type="text" name="task_name" class="form-control" value="{{ tmpl.task_name|default:'' }}" required>
+                    <input type="text" name="task_name" class="form-control" value="{{ tmpl.task_name|default:''|escape }}" required>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label fw500">Assigned To</label>
-                    <input type="text" name="assigned_to" class="form-control" value="{{ tmpl.assigned_to|default:'' }}" required>
+                    <input type="text" name="assigned_to" class="form-control" value="{{ tmpl.assigned_to|default:''|escape }}" required>
                 </div>
                 <div class="col-md-4">
                     <label class="form-label fw500">SLA Days</label>
@@ -35,7 +35,7 @@
                     <select name="group" class="form-select">
                         <option value="">— Ungrouped —</option>
                         {% for g in groups %}
-                        <option value="{{ g.id }}" {% if tmpl and tmpl.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                        <option value="{{ g.id }}" {% if tmpl and tmpl.group_id == g.id %}selected{% endif %}>{{ g.name|escape }}</option>
                         {% endfor %}
                     </select>
                 </div>

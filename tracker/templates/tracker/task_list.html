@@ -83,18 +83,18 @@
                 <div class="today-line" style="left: calc(200px + (100% - 200px) * {{ today_pct }} / 100);"></div>
                 {% endif %}
                 {% for block in group_blocks %}
-                <details class="gantt-group-block" data-group-id="{{ block.id }}" open>
+                <details class="gantt-group-block" data-group-id="{{ block.id }}">
                     <summary class="gantt-row gantt-group-summary status-{{ block.summary.status }}">
                         <div class="gantt-label">
                             <span class="gantt-group-chevron"></span>
-                            <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
+                            <strong>{{ block.group.name|default:"Ungrouped"|escape }}</strong>
                             <span class="badge bg-secondary ms-1">{{ block.summary.completed }}/{{ block.summary.total }}</span>
                         </div>
                         <div class="gantt-track">
                             {% if block.group_bar %}
                             <div class="gantt-bar group status-{{ block.group_bar.status }}"
                                  style="left: {{ block.group_bar.start_offset }}%; width: {{ block.group_bar.width }}%;"
-                                 title="{{ block.group.name|default:'Ungrouped' }} — {{ block.summary.overdue }} overdue, {{ block.summary.pending }} in progress, {{ block.summary.completed }} completed">
+                                 title="{{ block.group.name|default:"Ungrouped"|escape }} — {{ block.summary.overdue }} overdue, {{ block.summary.pending }} in progress, {{ block.summary.completed }} completed">
                                 <span class="gantt-bar-label">
                                     {% if block.summary.overdue %}
                                     <span class="gantt-bar-count gantt-bar-count-overdue">
@@ -118,11 +118,11 @@
                     </summary>
                     {% for gt in block.gantt_tasks %}
                     <div class="gantt-row" data-task-id="{{ gt.task.id }}">
-                        <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
+                        <div class="gantt-label" title="{{ gt.task.task_name|escape }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name|escape }}</div>
                         <div class="gantt-track">
                             <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
                                  style="left: {{ gt.start_offset }}%; width: {{ gt.duration }}%;"
-                                 title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
+                                 title="{{ gt.task.task_name|escape }} - Due: {{ gt.task.scheduled_date|date:"Y-m-d" }}"></div>
                         </div>
                     </div>
                     {% endfor %}
@@ -163,10 +163,10 @@
             </thead>
             <tbody>
                 {% for block in group_blocks %}
-                <tr class="group-summary-row table-group-summary status-{{ block.summary.status }}" data-group-id="{{ block.id }}">
+                <tr class="group-summary-row table-group-summary collapsed status-{{ block.summary.status }}" data-group-id="{{ block.id }}">
                     <td colspan="9">
                         <span class="gantt-group-chevron"></span>
-                        <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
+                        <strong>{{ block.group.name|default:"Ungrouped"|escape }}</strong>
                         <span class="group-summary-counts ms-2">
                             {% if block.summary.overdue %}<span class="gantt-bar-count gantt-bar-count-overdue"><strong>{{ block.summary.overdue }}</strong> overdue</span>{% endif %}
                             {% if block.summary.pending %}<span class="gantt-bar-count gantt-bar-count-pending"><strong>{{ block.summary.pending }}</strong> in progress</span>{% endif %}
@@ -181,12 +181,12 @@
                         <input type="checkbox" class="form-check-input toggle-finished" data-task-id="{{ task.id }}" {% if task.finished %}checked{% endif %}>
                     </td>
                     <td>
-                        <span class="view-mode">{{ task.task_name }}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-name" value="{{ task.task_name }}" style="display:none;">
+                        <span class="view-mode">{{ task.task_name|escape }}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-name" value="{{ task.task_name|escape }}" style="display:none;">
                     </td>
                     <td>
-                        <span class="view-mode">{{ task.assigned_to }}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ task.assigned_to }}" style="display:none;">
+                        <span class="view-mode">{{ task.assigned_to|escape }}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ task.assigned_to|escape }}" style="display:none;">
                     </td>
                     <td>
                         <span class="view-mode">{% if st == "Working Day" or st == "Business Day" %}WD{% else %}CD{% endif %} {{ task.sla_days }}</span>
@@ -209,15 +209,15 @@
                                style="display:none;">
                     </td>
                     <td class="comment-cell" data-task-id="{{ task.id }}">
-                        <span class="view-mode comment-display" title="Click to edit">{% if task.comments %}{{ task.comments|truncatechars:20 }}{% else %}<span class="text-muted">(click to add)</span>{% endif %}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-comments comment-input" value="{{ task.comments }}" style="display:none;">
+                        <span class="view-mode comment-display" title="Click to edit">{% if task.comments %}{{ task.comments|truncatechars:20|escape }}{% else %}<span class="text-muted">(click to add)</span>{% endif %}</span>
+                        <input type="text" class="edit-mode form-control form-control-sm edit-comments comment-input" value="{{ task.comments|escape }}" style="display:none;">
                     </td>
                     <td>
-                        <span class="view-mode">{% if task.group %}{{ task.group.name }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
+                        <span class="view-mode">{% if task.group %}{{ task.group.name|escape }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
                         <select class="edit-mode form-select form-select-sm edit-group-id" style="display:none;">
                             <option value="">— Ungrouped —</option>
                             {% for g in groups %}
-                            <option value="{{ g.id }}" {% if task.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                            <option value="{{ g.id }}" {% if task.group_id == g.id %}selected{% endif %}>{{ g.name|escape }}</option>
                             {% endfor %}
                         </select>
                     </td>
@@ -271,7 +271,7 @@
                 <select name="group" class="form-select form-select-sm">
                     <option value="">No group</option>
                     {% for g in groups %}
-                    <option value="{{ g.id }}">{{ g.name }}</option>
+                    <option value="{{ g.id }}">{{ g.name|escape }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -518,7 +518,14 @@ function stepMonth(btn, delta) {
                     span.className = 'gantt-bar-count ' + cls;
                     parent.appendChild(span);
                 }
-                span.innerHTML = '<strong>' + n + '</strong> ' + COUNT_LABELS[key];
+                // Clear existing children before appending to prevent duplication
+                while (span.firstChild) {
+                    span.removeChild(span.firstChild);
+                }
+                var strong = document.createElement('strong');
+                strong.textContent = n;
+                span.appendChild(strong);
+                span.appendChild(document.createTextNode(' ' + COUNT_LABELS[key]));
             } else if (span) {
                 span.parentNode.removeChild(span);
             }
@@ -644,9 +651,15 @@ function stepMonth(btn, delta) {
             if (data && data.ok) {
                 input.dataset.prev = data.comments;
                 // Re-render display: use server text, falling back to placeholder when empty.
-                display.innerHTML = data.comments
-                    ? (data.comments.length > 20 ? data.comments.slice(0, 20) + '…' : data.comments)
-                    : '<span class="text-muted">(click to add)</span>';
+                display.textContent = '';
+                if (data.comments) {
+                    display.textContent = data.comments.length > 20 ? data.comments.slice(0, 20) + '\u2026' : data.comments;
+                } else {
+                    var placeholder = document.createElement('span');
+                    placeholder.className = 'text-muted';
+                    placeholder.textContent = '(click to add)';
+                    display.appendChild(placeholder);
+                }
                 input.style.display = 'none';
                 display.style.display = '';
             } else {

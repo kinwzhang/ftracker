@@ -9,11 +9,11 @@
             <div class="row g-3 mb-3">
                 <div class="col-md-6">
                     <label class="form-label fw500">Task Name</label>
-                    <input type="text" name="task_name" class="form-control" value="{{ task.task_name|default:'' }}" required>
+                    <input type="text" name="task_name" class="form-control" value="{{ task.task_name|default:''|escape }}" required>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label fw500">Assigned To</label>
-                    <input type="text" name="assigned_to" class="form-control" value="{{ task.assigned_to|default:'' }}" required>
+                    <input type="text" name="assigned_to" class="form-control" value="{{ task.assigned_to|default:''|escape }}" required>
                 </div>
                 <div class="col-md-3">
                     <label class="form-label fw500">SLA (Days)</label>
@@ -42,13 +42,13 @@
                     <select name="group" class="form-select">
                         <option value="">— Ungrouped —</option>
                         {% for g in groups %}
-                        <option value="{{ g.id }}" {% if task and task.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+                        <option value="{{ g.id }}" {% if task and task.group_id == g.id %}selected{% endif %}>{{ g.name|escape }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="col-md-12">
                     <label class="form-label fw500">Comments</label>
-                    <textarea name="comments" class="form-control" rows="3">{{ task.comments|default:'' }}</textarea>
+                    <textarea name="comments" class="form-control" rows="3">{{ task.comments|default:''|escape }}</textarea>
                 </div>
             </div>
             <p class="text-muted small">Month: {{ month|date:"F Y" }} | Scheduled date is calculated automatically based on SLA.</p>
@@ -67,8 +67,8 @@
             <tbody>
                 {% for t in templates %}
                 <tr>
-                    <td>{{ t.task_name }}</td>
-                    <td>{{ t.assigned_to }}</td>
+                    <td>{{ t.task_name|escape }}</td>
+                    <td>{{ t.assigned_to|escape }}</td>
                     <td>{{ t.sla_days }}</td>
                     <td>{{ t.sla_type }}</td>
                     <td><button class="btn btn-sm btn-outline-primary" onclick="fillTemplate({{ t.id }})">Use</button></td>
@@ -78,8 +78,9 @@
         </table>
     </div>
 </div>
+{{ templates_json|json_script:"templates-data" }}
 <script>
-    const templates = {{ templates_json|safe }};
+    const templates = JSON.parse(document.getElementById('templates-data').textContent);
     function fillTemplate(id) {
         const t = templates.find(x => x.id === id);
         if (t) {
