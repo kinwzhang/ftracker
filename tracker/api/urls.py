@@ -1,0 +1,27 @@
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('csrf/', views.csrf_token, name='api_csrf'),
+    path('tasks/data/', views.task_data, name='api_task_data'),
+    path('tasks/', views.task_list_api, name='api_task_list'),
+    path('tasks/<int:task_id>/', views.task_detail_api, name='api_task_detail'),
+    path('tasks/<int:task_id>/toggle/', views.task_toggle_api, name='api_task_toggle'),
+    path('tasks/<int:task_id>/comment/', views.task_comment_api, name='api_task_comment'),
+    path('tasks/<int:task_id>/inline-save/', views.task_inline_save_api, name='api_task_inline_save'),
+    path('tasks/bulk-save/', views.task_bulk_save_api, name='api_task_bulk_save'),
+    path('templates/', views.template_list_api, name='api_template_list'),
+    path('templates/<int:template_id>/', views.template_detail_api, name='api_template_detail'),
+    path('templates/<int:template_id>/inline-save/', views.template_inline_save_api, name='api_template_inline_save'),
+    path('templates/bulk-save/', views.template_bulk_save_api, name='api_template_bulk_save'),
+    path('templates/bulk-upload/', views.template_bulk_upload_api, name='api_template_bulk_upload'),
+    path('groups/', views.group_list_api, name='api_group_list'),
+    path('groups/<int:group_id>/', views.group_detail_api, name='api_group_detail'),
+    path('groups/<int:group_id>/inline-save/', views.group_inline_save_api, name='api_group_inline_save'),
+    path('dashboard/', views.dashboard_api, name='api_dashboard'),
+    path('holidays/', views.holiday_list_api, name='api_holiday_list'),
+    path('generate-next-month/', views.generate_next_month_api, name='api_generate_next_month'),
+    path('set-month/', views.set_month_api, name='api_set_month'),
+    path('export/csv/', views.export_csv_api, name='api_export_csv'),
+    path('export/html/', views.export_html_api, name='api_export_html'),
+]

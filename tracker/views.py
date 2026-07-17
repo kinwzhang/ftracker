@@ -1271,3 +1271,22 @@ def holiday_list(request):
         "month_holidays": month_holidays,
         "all_year": all_named,
     })
+
+
+# --- React SPA catch-all view ---
+
+import os
+from django.conf import settings
+
+
+def react_index(request, path=""):
+    """Serve the React SPA index.html for all non-API, non-admin routes."""
+    index_path = os.path.join(settings.BASE_DIR, "frontend", "dist", "index.html")
+    if os.path.exists(index_path):
+        with open(index_path, "r") as f:
+            return HttpResponse(f.read(), content_type="text/html")
+    return HttpResponse(
+        "<h1>React app not built</h1><p>Run <code>npm run build</code> in the frontend/ directory.</p>",
+        content_type="text/html",
+        status=500,
+    )

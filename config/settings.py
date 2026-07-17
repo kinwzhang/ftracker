@@ -50,6 +50,13 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# CORS settings for Vite dev server
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
+CORS_ALLOW_CREDENTIALS = True
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
@@ -116,3 +123,6 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATICFILES_DIRS = [
+    BASE_DIR / 'frontend' / 'dist',
+]
