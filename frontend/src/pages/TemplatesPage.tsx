@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Alert from '../components/common/Alert';
+import ConfirmDialog from '../components/common/ConfirmDialog';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import {
   fetchTemplates,
@@ -51,6 +52,8 @@ const TemplatesPage: React.FC = () => {
   const [csvText, setCsvText] = useState('');
   const [csvUploading, setCsvUploading] = useState(false);
 
+  const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -98,14 +101,20 @@ const TemplatesPage: React.FC = () => {
   };
 
   const handleDeleteGroup = async (groupId: number) => {
-    if (!window.confirm('Delete this group?')) return;
-    try {
-      await deleteGroup(groupId);
-      setAlertMsg({ type: 'success', text: 'Group deleted' });
-      loadData();
-    } catch (e: any) {
-      setAlertMsg({ type: 'danger', text: e?.response?.data?.error || 'Delete failed' });
-    }
+    setConfirmAction({
+      title: 'Delete Group',
+      message: 'Delete this group? Tasks assigned to it will become ungrouped.',
+      onConfirm: async () => {
+        setConfirmAction(null);
+        try {
+          await deleteGroup(groupId);
+          setAlertMsg({ type: 'success', text: 'Group deleted' });
+          loadData();
+        } catch (e: any) {
+          setAlertMsg({ type: 'danger', text: e?.response?.data?.error || 'Delete failed' });
+        }
+      },
+    });
   };
 
   const handleAddTemplate = async (e: React.FormEvent) => {
@@ -143,14 +152,20 @@ const TemplatesPage: React.FC = () => {
   };
 
   const handleDeleteTemplate = async (id: number) => {
-    if (!window.confirm('Delete this template?')) return;
-    try {
-      await deleteTemplate(id);
-      setAlertMsg({ type: 'success', text: 'Template deleted' });
-      loadData();
-    } catch (e: any) {
-      setAlertMsg({ type: 'danger', text: e?.response?.data?.error || 'Delete failed' });
-    }
+    setConfirmAction({
+      title: 'Delete Template',
+      message: 'Delete this template? This action cannot be undone.',
+      onConfirm: async () => {
+        setConfirmAction(null);
+        try {
+          await deleteTemplate(id);
+          setAlertMsg({ type: 'success', text: 'Template deleted' });
+          loadData();
+        } catch (e: any) {
+          setAlertMsg({ type: 'danger', text: e?.response?.data?.error || 'Delete failed' });
+        }
+      },
+    });
   };
 
   const handleBulkToggle = (id: number) => {
@@ -256,6 +271,14 @@ const TemplatesPage: React.FC = () => {
           <Alert type={alertMsg.type} message={alertMsg.text} onDismiss={() => setAlertMsg(null)} />
         </div>
       )}
+
+      <ConfirmDialog
+        show={confirmAction !== null}
+        title={confirmAction?.title || ''}
+        message={confirmAction?.message || ''}
+        onConfirm={() => confirmAction?.onConfirm()}
+        onCancel={() => setConfirmAction(null)}
+      />
 
       <div className="d-flex flex-wrap gap-2 mb-3">
         <button className="btn btn-sm btn-primary" onClick={() => setShowAddTemplate(!showAddTemplate)}>
