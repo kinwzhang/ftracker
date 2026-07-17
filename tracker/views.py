@@ -275,7 +275,7 @@ def task_toggle_finished(request, task_id):
             "finished": task.finished,
             "completion_display": _format_completion(task),
         })
-    return redirect("task_list")
+    return redirect("/")
 
 
 def _format_completion(task):
@@ -320,7 +320,7 @@ def task_save_comment(request, task_id):
     )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"ok": True, "comments": task.comments})
-    return redirect("task_list")
+    return redirect("/")
 
 
 # --- Regular task add/edit/delete ---
@@ -353,7 +353,7 @@ def task_add(request):
             changes={"task_name": task_name, "assigned_to": assigned_to, "sla_days": sla_days, "sla_type": sla_type},
         )
         messages.success(request, f"Task '{task_name}' created.")
-        return redirect("task_list")
+        return redirect("/")
 
     templates = TaskTemplate.objects.all()
     return render(request, "tracker/task_form.html", {
@@ -409,7 +409,7 @@ def task_edit(request, task_id):
             changes={"old": old_values, "new": new_values},
         )
         messages.success(request, f"Task '{task.task_name}' updated.")
-        return redirect("task_list")
+        return redirect("/")
 
     return render(request, "tracker/task_form.html", {
         "task": task,
@@ -479,7 +479,7 @@ def task_inline_save(request, task_id):
             "scheduled_date": task.scheduled_date.isoformat(),
             "sla_type_short": "WD" if task.sla_type == "Working Day" else "CD",
         })
-    return redirect("task_list")
+    return redirect("/")
 
 
 def _bulk_payload_from_request(request):
@@ -547,7 +547,7 @@ def task_bulk_save(request):
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"ok": False, "error": "no_updates"}, status=400)
         messages.error(request, "No task updates were received.")
-        return redirect("task_list")
+        return redirect("/")
 
     saved_ids: list[int] = []
     try:
@@ -568,12 +568,12 @@ def task_bulk_save(request):
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"ok": False, "error": str(exc)}, status=400)
         messages.error(request, f"Bulk save failed: {exc}")
-        return redirect("task_list")
+        return redirect("/")
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"ok": True, "saved": saved_ids})
     messages.success(request, f"Updated {len(saved_ids)} task(s).")
-    return redirect("task_list")
+    return redirect("/")
 
 
 @require_POST
@@ -587,7 +587,7 @@ def task_delete(request, task_id):
     )
     task.delete()
     messages.success(request, "Task deleted.")
-    return redirect("task_list")
+    return redirect("/")
 
 
 # --- Dashboard (E1 stats are also on main page now) ---
@@ -648,7 +648,7 @@ def generate_next_month(request):
     existing = Task.objects.filter(month=next_month).count()
     if existing > 0:
         messages.warning(request, f"Tasks already exist for {next_month.strftime('%B %Y')}.")
-        return redirect("task_list")
+        return redirect("/")
 
     templates = TaskTemplate.objects.all()
     if templates.exists():
@@ -679,7 +679,7 @@ def generate_next_month(request):
 
     request.session["current_month"] = next_month.isoformat()
     messages.success(request, f"Tasks generated for {next_month.strftime('%B %Y')}.")
-    return redirect("task_list")
+    return redirect("/")
 
 
 @require_POST
@@ -691,7 +691,7 @@ def set_month(request):
     next_url = request.POST.get("next", "").strip()
     if next_url.startswith("/") and not next_url.startswith("//"):
         return redirect(next_url)
-    return redirect("task_list")
+    return redirect("/")
 
 
 # --- Export ---
@@ -798,7 +798,7 @@ def template_add(request):
                 f"Reordered {shifted} template(s) to make room for order {actual}.",
             )
         messages.success(request, "Template added.")
-        return redirect("template_list")
+        return redirect("/templates")
     return render(
         request,
         "tracker/template_form.html",
@@ -824,7 +824,7 @@ def template_edit(request, template_id):
                 f"Reordered {shifted} template(s) to make room for order {actual}.",
             )
         messages.success(request, "Template updated.")
-        return redirect("template_list")
+        return redirect("/templates")
     return render(
         request,
         "tracker/template_form.html",
@@ -883,7 +883,7 @@ def template_inline_save(request, template_id):
         return JsonResponse(
             {"ok": True, "sort_order": tmpl.sort_order, "group_id": tmpl.group_id}
         )
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 @require_POST
@@ -903,7 +903,7 @@ def template_bulk_save(request):
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"ok": False, "error": "no_updates"}, status=400)
         messages.error(request, "No template updates were received.")
-        return redirect("template_list")
+        return redirect("/templates")
 
     saved_ids: list[int] = []
     total_shifted = 0
@@ -920,7 +920,7 @@ def template_bulk_save(request):
         if request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return JsonResponse({"ok": False, "error": str(exc)}, status=400)
         messages.error(request, f"Bulk save failed: {exc}")
-        return redirect("template_list")
+        return redirect("/templates")
 
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"ok": True, "saved": saved_ids, "shifted": total_shifted})
@@ -930,7 +930,7 @@ def template_bulk_save(request):
             request,
             f"Reordered {total_shifted} template(s) to accommodate unique sort orders.",
         )
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 @require_POST
@@ -938,7 +938,7 @@ def template_delete(request, template_id):
     tmpl = get_object_or_404(TaskTemplate, id=template_id)
     tmpl.delete()
     messages.success(request, "Template deleted.")
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 # --- Group management ---
@@ -958,10 +958,10 @@ def group_add(request):
     name = (request.POST.get("name") or "").strip()
     if not name:
         messages.error(request, "Group name is required.")
-        return redirect("template_list")
+        return redirect("/templates")
     if Group.objects.filter(name__iexact=name).exists():
         messages.error(request, f"A group named '{name}' already exists.")
-        return redirect("template_list")
+        return redirect("/templates")
     requested = _parse_int_field(request.POST.get("sort_order"))
     actual, shifted = _assign_group_sort_order(requested)
     group = Group.objects.create(name=name, sort_order=actual)
@@ -971,7 +971,7 @@ def group_add(request):
             f"Reordered {shifted} group(s) to make room for order {actual}.",
         )
     messages.success(request, f"Group '{group.name}' added.")
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 @require_POST
@@ -980,10 +980,10 @@ def group_edit(request, group_id):
     name = (request.POST.get("name") or "").strip()
     if not name:
         messages.error(request, "Group name is required.")
-        return redirect("template_list")
+        return redirect("/templates")
     if Group.objects.filter(name__iexact=name).exclude(id=group.id).exists():
         messages.error(request, f"A group named '{name}' already exists.")
-        return redirect("template_list")
+        return redirect("/templates")
     requested = _parse_int_field(request.POST.get("sort_order"), default=group.sort_order)
     actual, shifted = _assign_group_sort_order(requested, exclude_id=group.id)
     group.name = name
@@ -995,7 +995,7 @@ def group_edit(request, group_id):
             f"Reordered {shifted} group(s) to make room for order {actual}.",
         )
     messages.success(request, f"Group '{group.name}' updated.")
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 @require_POST
@@ -1007,7 +1007,7 @@ def group_inline_save(request, group_id):
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
                 return JsonResponse({"ok": False, "error": "name_taken"}, status=400)
             messages.error(request, f"A group named '{name}' already exists.")
-            return redirect("template_list")
+            return redirect("/templates")
         group.name = name
     requested = _parse_int_field(request.POST.get("sort_order"), default=group.sort_order)
     actual, shifted = _assign_group_sort_order(requested, exclude_id=group.id)
@@ -1020,7 +1020,7 @@ def group_inline_save(request, group_id):
         )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({"ok": True, "name": group.name, "sort_order": actual})
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 @require_POST
@@ -1038,7 +1038,7 @@ def group_delete(request, group_id):
             f" Unlinked {template_count} template(s) and {task_count} task(s)."
         )
     messages.success(request, summary)
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 def _assign_group_sort_order(requested_order, exclude_id=None):
@@ -1175,7 +1175,7 @@ def template_bulk_upload(request):
     csv_text, source = _resolve_csv_source(request)
     if not csv_text:
         messages.error(request, "Provide a CSV file or paste CSV text before uploading.")
-        return redirect("template_list")
+        return redirect("/templates")
 
     _, records, warnings = _parse_bulk_csv(csv_text)
 
@@ -1252,7 +1252,7 @@ def template_bulk_upload(request):
         messages.warning(request, warning)
     if len(warnings) > 10:
         messages.warning(request, f"... and {len(warnings) - 10} more warning(s).")
-    return redirect("template_list")
+    return redirect("/templates")
 
 
 # --- E6: Public holiday list ---

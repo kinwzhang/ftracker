@@ -5,6 +5,12 @@ function getCSRFToken(): string {
   return match ? match[1] : '';
 }
 
+let onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(cb: (() => void) | null) {
+  onUnauthorized = cb;
+}
+
 const client = axios.create({
   baseURL: '',
   headers: {
@@ -23,7 +29,12 @@ client.interceptors.request.use((config) => {
 
 client.interceptors.response.use(
   (response) => response.data,
-  (error) => Promise.reject(error)
+  (error) => {
+    if (error?.response?.status === 401 && onUnauthorized) {
+      onUnauthorized();
+    }
+    return Promise.reject(error);
+  }
 );
 
 export default client;

@@ -1,12 +1,56 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import TasksPage from './pages/TasksPage';
 import DashboardPage from './pages/DashboardPage';
 import TemplatesPage from './pages/TemplatesPage';
 import HolidaysPage from './pages/HolidaysPage';
+import LoginPage from './components/LoginPage';
+import LoadingSpinner from './components/common/LoadingSpinner';
+import { fetchMe, logoutUser } from './api/auth';
+import { setOnUnauthorized } from './api/client';
 
 const App: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [auth, setAuth] = useState<{ username: string; isStaff: boolean } | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  const checkAuth = useCallback(async () => {
+    try {
+      const data = await fetchMe();
+      if (data.authenticated) {
+        setAuth({ username: data.username, isStaff: data.is_staff });
+      } else {
+        setAuth(null);
+      }
+    } catch {
+      setAuth(null);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setOnUnauthorized(() => setAuth(null));
+    checkAuth();
+    return () => setOnUnauthorized(null);
+  }, [checkAuth]);
+
+  const handleLogin = (username: string, isStaff: boolean) => {
+    setAuth({ username, isStaff });
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    setAuth(null);
+  };
+
+  if (authLoading) {
+    return <LoadingSpinner message="Checking authentication..." />;
+  }
+
+  if (!auth) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
 
   return (
     <BrowserRouter>
@@ -63,6 +107,11 @@ const App: React.FC = () => {
                 >
                   Holidays
                 </NavLink>
+              </li>
+              <li className="nav-item">
+                <button className="nav-link btn btn-link" onClick={handleLogout}>
+                  Logout ({auth.username})
+                </button>
               </li>
             </ul>
           </div>

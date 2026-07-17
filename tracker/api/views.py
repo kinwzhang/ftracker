@@ -3,6 +3,8 @@ import json
 from calendar import monthrange
 from datetime import date, timedelta
 
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Count, F, Max
 from django.http import HttpResponse, JsonResponse
@@ -129,10 +131,50 @@ def csrf_token(request):
 
 
 # ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+
+@require_GET
+def auth_me(request):
+    """Return the currently authenticated user, or 401."""
+    if request.user.is_authenticated:
+        return JsonResponse({
+            "authenticated": True,
+            "username": request.user.username,
+            "is_staff": request.user.is_staff,
+        })
+    return JsonResponse({"authenticated": False}, status=401)
+
+
+@require_POST
+def auth_login(request):
+    data = _parse_json_body(request) or request.POST
+    username = data.get("username", "")
+    password = data.get("password", "")
+    user = authenticate(request, username=username, password=password)
+    if user is not None:
+        login(request, user)
+        return JsonResponse({
+            "ok": True,
+            "username": user.username,
+            "is_staff": user.is_staff,
+        })
+    return JsonResponse({"ok": False, "error": "Invalid username or password."}, status=401)
+
+
+@require_POST
+@login_required
+def auth_logout(request):
+    logout(request)
+    return JsonResponse({"ok": True})
+
+
+# ---------------------------------------------------------------------------
 # Task data (full page payload for the React frontend)
 # ---------------------------------------------------------------------------
 
 @require_GET
+@login_required
 def task_data(request):
     month = _get_month_param(request)
     tasks_raw = list(Task.objects.filter(month=month).select_related("group"))
@@ -219,6 +261,7 @@ def task_data(request):
 # Task CRUD
 # ---------------------------------------------------------------------------
 
+@login_required
 def task_list_api(request):
     """GET /api/v1/tasks/ → list tasks for the current month.
     POST /api/v1/tasks/ → create a new task."""
@@ -262,6 +305,7 @@ def _task_create(request):
     return JsonResponse({"ok": True, "task": _serialize_task(task)}, status=201)
 
 
+@login_required
 def task_detail_api(request, task_id):
     """PATCH /api/v1/tasks/<id>/ → update task. DELETE /api/v1/tasks/<id>/ → delete task."""
     if request.method == "PATCH":
@@ -293,6 +337,7 @@ def task_detail_api(request, task_id):
 # ---------------------------------------------------------------------------
 
 @require_POST
+@login_required
 def task_toggle_api(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     old_finished = task.finished
@@ -322,6 +367,7 @@ def task_toggle_api(request, task_id):
 
 
 @require_POST
+@login_required
 def task_comment_api(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     data = _parse_json_body(request) or request.POST
@@ -338,6 +384,7 @@ def task_comment_api(request, task_id):
 
 
 @require_POST
+@login_required
 def task_inline_save_api(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     data = _parse_json_body(request) or request.POST
@@ -356,6 +403,7 @@ def task_inline_save_api(request, task_id):
 
 
 @require_POST
+@login_required
 def task_bulk_save_api(request):
     updates = _bulk_payload_from_request(request)
     if not updates:
@@ -386,6 +434,7 @@ def task_bulk_save_api(request):
 # Template CRUD
 # ---------------------------------------------------------------------------
 
+@login_required
 def template_list_api(request):
     """GET /api/v1/templates/ → list templates. POST /api/v1/templates/ → create template."""
     if request.method == "POST":
@@ -416,6 +465,7 @@ def _template_create(request):
     return JsonResponse(result, status=201)
 
 
+@login_required
 def template_detail_api(request, template_id):
     """PATCH/DELETE /api/v1/templates/<id>/."""
     if request.method == "PATCH":
@@ -434,6 +484,7 @@ def template_detail_api(request, template_id):
 
 
 @require_POST
+@login_required
 def template_inline_save_api(request, template_id):
     tmpl = get_object_or_404(TaskTemplate, id=template_id)
     data = _parse_json_body(request) or request.POST
@@ -445,6 +496,7 @@ def template_inline_save_api(request, template_id):
 
 
 @require_POST
+@login_required
 def template_bulk_save_api(request):
     updates = _bulk_payload_from_request(request)
     if not updates:
@@ -468,6 +520,7 @@ def template_bulk_save_api(request):
 
 
 @require_POST
+@login_required
 def template_bulk_upload_api(request):
     csv_text, source = _resolve_csv_source(request)
     if not csv_text:
@@ -532,6 +585,7 @@ def template_bulk_upload_api(request):
 # Group CRUD
 # ---------------------------------------------------------------------------
 
+@login_required
 def group_list_api(request):
     """GET /api/v1/groups/ → list groups. POST /api/v1/groups/ → create group."""
     if request.method == "POST":
@@ -569,6 +623,7 @@ def _group_create(request):
     return JsonResponse(result, status=201)
 
 
+@login_required
 def group_detail_api(request, group_id):
     """PATCH/DELETE /api/v1/groups/<id>/."""
     if request.method == "PATCH":
@@ -605,6 +660,7 @@ def group_detail_api(request, group_id):
 
 
 @require_POST
+@login_required
 def group_inline_save_api(request, group_id):
     group = get_object_or_404(Group, id=group_id)
     data = _parse_json_body(request) or request.POST
@@ -625,6 +681,7 @@ def group_inline_save_api(request, group_id):
 # ---------------------------------------------------------------------------
 
 @require_GET
+@login_required
 def dashboard_api(request):
     month = _get_month_param(request)
     tasks = Task.objects.filter(month=month)
@@ -685,6 +742,7 @@ def dashboard_api(request):
 # ---------------------------------------------------------------------------
 
 @require_GET
+@login_required
 def holiday_list_api(request):
     year = int(request.GET.get("year", timezone.localdate().year))
     month_num = int(request.GET.get("month", timezone.localdate().month))
@@ -704,6 +762,7 @@ def holiday_list_api(request):
 # ---------------------------------------------------------------------------
 
 @require_POST
+@login_required
 def generate_next_month_api(request):
     current_month = _get_current_month(request)
     if current_month.month == 12:
@@ -757,6 +816,7 @@ def generate_next_month_api(request):
 
 
 @require_POST
+@login_required
 def set_month_api(request):
     data = _parse_json_body(request) or request.POST
     year = int(data.get("year", 0))
@@ -772,6 +832,7 @@ def set_month_api(request):
 # ---------------------------------------------------------------------------
 
 @require_GET
+@login_required
 def export_csv_api(request):
     month = _get_month_param(request)
     tasks = Task.objects.filter(month=month)
@@ -789,6 +850,7 @@ def export_csv_api(request):
 
 
 @require_GET
+@login_required
 def export_html_api(request):
     month = _get_month_param(request)
     tasks = Task.objects.filter(month=month)

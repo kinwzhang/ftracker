@@ -2,6 +2,7 @@ from datetime import date, timedelta
 
 import json
 
+from django.contrib.auth.models import User
 from django.test import Client, TestCase
 
 from .models import AuditLog, Group, Task, TaskTemplate
@@ -358,12 +359,15 @@ class GroupReflectionTests(TestCase):
         created = {t.task_name: t for t in Task.objects.filter(month=self.next_month)}
         self.assertEqual(created["T1"].group_id, self.g1.id)
         self.assertEqual(created["T2"].group_id, self.g2.id)
-        # Now the Gantt/task-list view should put T1/T2 in their group blocks
+        # Now the API task-data endpoint should put T1/T2 in their group blocks
         # rather than the synthetic ungrouped bucket.
-        response = client.get("/")
+        user = User.objects.create_user("tester", password="test")
+        client.force_login(user)
+        response = client.get(f"/api/v1/tasks/data/?month={self.next_month.isoformat()}")
         self.assertEqual(response.status_code, 200)
-        body = response.content.decode()
-        # Both group names must appear as group-summary headers.
+        data = response.json()
+        body = json.dumps(data)
+        # Both group names must appear in the response.
         self.assertIn("G1", body)
         self.assertIn("G2", body)
 
@@ -473,19 +477,22 @@ class GroupReflectionTests(TestCase):
         )
         client = Client()
         self._set_session_month(client)
-        response = client.get("/")
+        user = User.objects.create_user("tester", password="test")
+        client.force_login(user)
+        response = client.get(f"/api/v1/tasks/data/?month={self.month.isoformat()}")
         self.assertEqual(response.status_code, 200)
-        blocks = response.context["group_blocks"]
+        data = response.json()
+        blocks = data["group_blocks"]
         # Find the g1 block.
-        g1_blocks = [b for b in blocks if b["group"] and b["group"].id == self.g1.id]
+        g1_blocks = [b for b in blocks if b["group"] and b["group"]["id"] == self.g1.id]
         self.assertEqual(len(g1_blocks), 1)
-        g1_task_ids = {t.id for t in g1_blocks[0]["tasks"]}
+        g1_task_ids = {t["id"] for t in g1_blocks[0]["tasks"]}
         self.assertIn(t1.id, g1_task_ids)
         self.assertIn(t2.id, g1_task_ids)
         # Ungrouped synthetic block holds the orphan.
         ungrouped = [b for b in blocks if b["group"] is None]
         self.assertEqual(len(ungrouped), 1)
-        self.assertIn(t_orphan.id, {t.id for t in ungrouped[0]["tasks"]})
+        self.assertIn(t_orphan.id, {t["id"] for t in ungrouped[0]["tasks"]})
 
 
 class BulkEditTests(TestCase):

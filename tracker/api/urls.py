@@ -3,6 +3,9 @@ from . import views
 
 urlpatterns = [
     path('csrf/', views.csrf_token, name='api_csrf'),
+    path('auth/me/', views.auth_me, name='api_auth_me'),
+    path('auth/login/', views.auth_login, name='api_auth_login'),
+    path('auth/logout/', views.auth_logout, name='api_auth_logout'),
     path('tasks/data/', views.task_data, name='api_task_data'),
     path('tasks/', views.task_list_api, name='api_task_list'),
     path('tasks/<int:task_id>/', views.task_detail_api, name='api_task_detail'),

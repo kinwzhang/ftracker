@@ -2,7 +2,9 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    path("", views.task_list, name="task_list"),
+    # NOTE: "/", "/dashboard/", "/templates/", "/holidays/" are served by
+    # the React SPA catch-all in config/urls.py.  Only non-conflicting
+    # legacy action endpoints remain here for backward compatibility.
     path("task/add/", views.task_add, name="task_add"),
     path("task/<int:task_id>/edit/", views.task_edit, name="task_edit"),
     path("task/<int:task_id>/delete/", views.task_delete, name="task_delete"),
@@ -10,8 +12,6 @@ urlpatterns = [
     path("task/<int:task_id>/comment/", views.task_save_comment, name="task_save_comment"),
     path("task/<int:task_id>/inline-save/", views.task_inline_save, name="task_inline_save"),
     path("task/bulk-save/", views.task_bulk_save, name="task_bulk_save"),
-    path("dashboard/", views.dashboard, name="dashboard"),
-    path("templates/", views.template_list, name="template_list"),
     path("templates/add/", views.template_add, name="template_add"),
     path("templates/bulk-upload/", views.template_bulk_upload, name="template_bulk_upload"),
     path("templates/<int:template_id>/edit/", views.template_edit, name="template_edit"),
@@ -22,7 +22,6 @@ urlpatterns = [
     path("groups/<int:group_id>/edit/", views.group_edit, name="group_edit"),
     path("groups/<int:group_id>/inline-save/", views.group_inline_save, name="group_inline_save"),
     path("groups/<int:group_id>/delete/", views.group_delete, name="group_delete"),
-    path("holidays/", views.holiday_list, name="holiday_list"),
     path("generate-next-month/", views.generate_next_month, name="generate_next_month"),
     path("export/csv/", views.export_csv, name="export_csv"),
     path("export/html/", views.export_html, name="export_html"),
