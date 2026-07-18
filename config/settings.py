@@ -20,12 +20,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-f9h&fg7ianh#(n(fpp--2mqet(6if$@c71()cwi-x@kw%n05&_',
-)
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', '')
 
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('true', '1', 'yes')
+
+if not DEBUG and not SECRET_KEY:
+    raise RuntimeError(
+        'DJANGO_SECRET_KEY environment variable is required when DEBUG=False. '
+        'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(50))"'
+    )
+
+if not SECRET_KEY:
+    SECRET_KEY = 'django-insecure-dev-only-key-not-for-production'
 
 ALLOWED_HOSTS = [
     h.strip()

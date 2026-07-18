@@ -3,7 +3,7 @@ class ContentSecurityPolicyMiddleware:
 
     # Relax during development; tighten for production.
     DEV_CSP = "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:5173; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:5173; style-src 'self' 'unsafe-inline' http://localhost:5173; img-src 'self' data:; font-src 'self'; connect-src 'self' http://localhost:5173"
-    PROD_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+    PROD_CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'"
 
     def __init__(self, get_response):
         self.get_response = get_response

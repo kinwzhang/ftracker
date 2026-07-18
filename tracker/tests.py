@@ -335,6 +335,7 @@ class GroupReflectionTests(TestCase):
         self.next_month = date(2026, 8, 1)
         self.g1 = Group.objects.create(name="G1", sort_order=1)
         self.g2 = Group.objects.create(name="G2", sort_order=2)
+        self.user = User.objects.create_user("tester", password="test")
 
     # --- generate_next_month -------------------------------------------------
 
@@ -354,6 +355,7 @@ class GroupReflectionTests(TestCase):
             sort_order=2, group=self.g2,
         )
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
         client.post("/generate-next-month/")
         created = {t.task_name: t for t in Task.objects.filter(month=self.next_month)}
@@ -361,8 +363,6 @@ class GroupReflectionTests(TestCase):
         self.assertEqual(created["T2"].group_id, self.g2.id)
         # Now the API task-data endpoint should put T1/T2 in their group blocks
         # rather than the synthetic ungrouped bucket.
-        user = User.objects.create_user("tester", password="test")
-        client.force_login(user)
         response = client.get(f"/api/v1/tasks/data/?month={self.next_month.isoformat()}")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -379,6 +379,7 @@ class GroupReflectionTests(TestCase):
             scheduled_date=self.month, month=self.month, group=self.g1,
         )
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
         client.post("/generate-next-month/")
         t = Task.objects.get(task_name="T1", month=self.next_month)
@@ -388,6 +389,7 @@ class GroupReflectionTests(TestCase):
 
     def test_task_add_persists_group(self):
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
         response = client.post("/task/add/", {
             "task_name": "New task",
@@ -403,6 +405,7 @@ class GroupReflectionTests(TestCase):
 
     def test_task_add_blank_group_is_ungrouped(self):
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
         client.post("/task/add/", {
             "task_name": "Ungrouped task",
@@ -423,6 +426,7 @@ class GroupReflectionTests(TestCase):
             scheduled_date=self.month, month=self.month,
         )
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
         response = client.post(
             f"/task/{task.id}/inline-save/",
@@ -446,6 +450,7 @@ class GroupReflectionTests(TestCase):
             scheduled_date=self.month, month=self.month,
         )
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
         client.post(
             f"/task/{task.id}/edit/",
@@ -476,9 +481,8 @@ class GroupReflectionTests(TestCase):
             scheduled_date=date(2026, 7, 7), month=self.month,
         )
         client = Client()
+        client.force_login(self.user)
         self._set_session_month(client)
-        user = User.objects.create_user("tester", password="test")
-        client.force_login(user)
         response = client.get(f"/api/v1/tasks/data/?month={self.month.isoformat()}")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -505,6 +509,7 @@ class BulkEditTests(TestCase):
         self.month = date(2026, 7, 1)
         self.g1 = Group.objects.create(name="G1", sort_order=1)
         self.g2 = Group.objects.create(name="G2", sort_order=2)
+        self.user = User.objects.create_user("tester", password="test")
         self.tasks = [
             Task.objects.create(
                 task_name=f"task-{i}", assigned_to="x", sla_days=1, sla_type="Working Day",
@@ -537,6 +542,7 @@ class BulkEditTests(TestCase):
 
     def test_task_bulk_save_persists_each_row(self):
         client = Client()
+        client.force_login(self.user)
         updates = [
             {"id": t.id, "task_name": f"renamed-{i}", "assigned_to": f"u-{i}",
              "sla_days": 2, "sla_type": "Calendar Day",
@@ -567,6 +573,7 @@ class BulkEditTests(TestCase):
 
     def test_task_bulk_save_atomic_on_error(self):
         client = Client()
+        client.force_login(self.user)
         before = {t.id: t.task_name for t in self.tasks}
         # Valid update for task 0, bad sla_days on task 1.
         updates = [
@@ -589,12 +596,14 @@ class BulkEditTests(TestCase):
 
     def test_task_bulk_save_no_updates_returns_error(self):
         client = Client()
+        client.force_login(self.user)
         response = self._post_json(client, "/task/bulk-save/", {"updates": []})
         self.assertEqual(response.status_code, 400)
         self.assertFalse(response.json()["ok"])
 
     def test_template_bulk_save_shifts_sort_orders(self):
         client = Client()
+        client.force_login(self.user)
         # tmpls[2] (currently sort_order=3) wants to take sort_order=1.
         # That should shift tmpls[0] 1->2 and tmpls[1] 2->3.
         updates = [
@@ -614,6 +623,7 @@ class BulkEditTests(TestCase):
 
     def test_template_bulk_save_updates_group(self):
         client = Client()
+        client.force_login(self.user)
         updates = [
             {"id": self.tmpls[0].id, "task_name": self.tmpls[0].task_name,
              "assigned_to": self.tmpls[0].assigned_to,
@@ -636,6 +646,7 @@ class BulkUploadTests(TestCase):
 
     def setUp(self):
         self.month = date(2026, 7, 1)
+        self.user = User.objects.create_user("tester", password="test")
 
     def _set_session(self, client):
         s = client.session
@@ -652,6 +663,7 @@ class BulkUploadTests(TestCase):
     def test_missing_groups_are_auto_created(self):
         # No groups exist beforehand. CSV references Finance, IT, Operations.
         client = self._set_session(Client())
+        client.force_login(self.user)
         csv = (
             "task_name,assigned_to,sla_days,sla_type,sort_order,group\n"
             "T1,A,3,Working Day,1,Finance\n"
@@ -675,6 +687,7 @@ class BulkUploadTests(TestCase):
         Group.objects.create(name="Finance", sort_order=1)
         Group.objects.create(name="IT", sort_order=2)
         client = self._set_session(Client())
+        client.force_login(self.user)
         csv = (
             "task_name,assigned_to,sla_days,sla_type,sort_order,group\n"
             "T1,A,3,Working Day,1,Finance\n"
@@ -696,6 +709,7 @@ class BulkUploadTests(TestCase):
         # should be treated as the same group for the purposes of reuse.
         Group.objects.create(name="Finance", sort_order=1)
         client = self._set_session(Client())
+        client.force_login(self.user)
         csv = (
             "task_name,assigned_to,sla_days,sla_type,sort_order,group\n"
             "T1,A,3,Working Day,1,finance\n"
@@ -710,6 +724,7 @@ class BulkUploadTests(TestCase):
         # Finance already exists; IT and Operations are new.
         existing = Group.objects.create(name="Finance", sort_order=1)
         client = self._set_session(Client())
+        client.force_login(self.user)
         csv = (
             "task_name,assigned_to,sla_days,sla_type,sort_order,group\n"
             "T1,A,3,Working Day,1,Finance\n"
@@ -730,6 +745,7 @@ class BulkUploadTests(TestCase):
         # Rows with blank group should stay ungrouped even after the loop
         # creates groups for other rows.
         client = self._set_session(Client())
+        client.force_login(self.user)
         csv = (
             "task_name,assigned_to,sla_days,sla_type,sort_order,group\n"
             "T1,A,3,Working Day,1,Finance\n"
@@ -754,6 +770,7 @@ class ToggleFinishedResponseTests(TestCase):
 
     def setUp(self):
         self.month = date(2026, 7, 1)
+        self.user = User.objects.create_user("tester", password="test")
 
     def _set_session(self, client):
         client.session.save()
@@ -765,6 +782,7 @@ class ToggleFinishedResponseTests(TestCase):
             scheduled_date=self.month, month=self.month,
         )
         client = self._set_session(Client())
+        client.force_login(self.user)
         # Toggle ON: completion_display should be "YYYY-MM-DD HH:MM" for today.
         response = client.post(
             f"/task/{task.id}/toggle/",
@@ -797,6 +815,9 @@ class CompletionDateTimeTests(TestCase):
     HH:MM time. Toggle-finished sets both; the edit form accepts either a
     date or datetime-local value via _parse_completion; display via
     _format_completion."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("tester", password="test")
 
     def test_parse_blank(self):
         from tracker.views import _parse_completion
@@ -855,6 +876,7 @@ class CompletionDateTimeTests(TestCase):
             scheduled_date=date(2026, 7, 1), month=date(2026, 7, 1),
         )
         client = Client()
+        client.force_login(self.user)
         client.session.save()
         response = client.post(
             f"/task/{task.id}/toggle/",
@@ -874,6 +896,9 @@ class CalculateScheduledDateTests(TestCase):
     """Calendar Day SLA pins to a day-of-month regardless of weekends or
     public holidays (B10). Working Day counts forward and skips both.
     Calendar Day semantics: sla_days = N → due on the Nth day of the month."""
+
+    def setUp(self):
+        self.user = User.objects.create_user("tester", password="test")
 
     def test_calendar_day_one_due_on_first_of_month(self):
         from tracker.holidays import calculate_scheduled_date
@@ -941,6 +966,7 @@ class CalculateScheduledDateTests(TestCase):
         from tracker.models import Task
         Task.objects.all().delete()
         client = Client()
+        client.force_login(self.user)
         client.session.save()
         client.post("/task/add/", {
             "task_name": "CD test",

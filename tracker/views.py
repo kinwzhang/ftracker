@@ -5,6 +5,7 @@ from calendar import monthrange
 from datetime import date, time, timedelta
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
 from django.http import HttpResponse, JsonResponse
@@ -142,6 +143,7 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day, total
     }
 
 
+@login_required
 def task_list(request):
     month = _get_current_month(request)
     tasks_raw = list(
@@ -246,6 +248,7 @@ def task_list(request):
 # --- Inline toggle finished (E3, E4) ---
 
 @require_POST
+@login_required
 def task_toggle_finished(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     old_finished = task.finished
@@ -307,6 +310,7 @@ def _parse_completion(value):
 # --- Inline save comment (E4) ---
 
 @require_POST
+@login_required
 def task_save_comment(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     old_comments = task.comments
@@ -325,6 +329,7 @@ def task_save_comment(request, task_id):
 
 # --- Regular task add/edit/delete ---
 
+@login_required
 def task_add(request):
     if request.method == "POST":
         task_name = request.POST.get("task_name")
@@ -364,6 +369,7 @@ def task_add(request):
     })
 
 
+@login_required
 def task_edit(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     if request.method == "POST":
@@ -464,6 +470,7 @@ def _apply_task_updates(task, payload):
 
 
 @require_POST
+@login_required
 def task_inline_save(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     old_values, new_values = _apply_task_updates(task, request.POST)
@@ -535,6 +542,7 @@ def _bulk_payload_from_request(request):
 
 
 @require_POST
+@login_required
 def task_bulk_save(request):
     """Apply a batch of task updates atomically.
 
@@ -577,6 +585,7 @@ def task_bulk_save(request):
 
 
 @require_POST
+@login_required
 def task_delete(request, task_id):
     task = get_object_or_404(Task, id=task_id)
     AuditLog.objects.create(
@@ -592,6 +601,7 @@ def task_delete(request, task_id):
 
 # --- Dashboard (E1 stats are also on main page now) ---
 
+@login_required
 def dashboard(request):
     month = _get_current_month(request)
     tasks = Task.objects.filter(month=month)
@@ -638,6 +648,7 @@ def dashboard(request):
 # --- Generate next month ---
 
 @require_POST
+@login_required
 def generate_next_month(request):
     current_month = _get_current_month(request)
     if current_month.month == 12:
@@ -683,6 +694,7 @@ def generate_next_month(request):
 
 
 @require_POST
+@login_required
 def set_month(request):
     year = int(request.POST.get("year"))
     month_num = int(request.POST.get("month"))
@@ -696,6 +708,7 @@ def set_month(request):
 
 # --- Export ---
 
+@login_required
 def export_csv(request):
     month = _get_current_month(request)
     tasks = Task.objects.filter(month=month)
@@ -710,6 +723,7 @@ def export_csv(request):
     return response
 
 
+@login_required
 def export_html(request):
     month = _get_current_month(request)
     tasks = Task.objects.filter(month=month)
@@ -728,6 +742,7 @@ def export_html(request):
 
 # --- E2: Task Template management ---
 
+@login_required
 def template_list(request):
     templates = TaskTemplate.objects.select_related("group").all()
     groups = Group.objects.all()
@@ -780,6 +795,7 @@ def _assign_template_sort_order(requested_order, exclude_id=None):
         return requested_order, 0
 
 
+@login_required
 def template_add(request):
     if request.method == "POST":
         requested = _parse_int_field(request.POST.get("sort_order"))
@@ -806,6 +822,7 @@ def template_add(request):
     )
 
 
+@login_required
 def template_edit(request, template_id):
     tmpl = get_object_or_404(TaskTemplate, id=template_id)
     if request.method == "POST":
@@ -871,6 +888,7 @@ def _apply_template_updates(tmpl, payload):
 
 
 @require_POST
+@login_required
 def template_inline_save(request, template_id):
     tmpl = get_object_or_404(TaskTemplate, id=template_id)
     shifted, old_values, new_values = _apply_template_updates(tmpl, request.POST)
@@ -887,6 +905,7 @@ def template_inline_save(request, template_id):
 
 
 @require_POST
+@login_required
 def template_bulk_save(request):
     """Apply a batch of template updates atomically.
 
@@ -934,6 +953,7 @@ def template_bulk_save(request):
 
 
 @require_POST
+@login_required
 def template_delete(request, template_id):
     tmpl = get_object_or_404(TaskTemplate, id=template_id)
     tmpl.delete()
@@ -954,6 +974,7 @@ def _parse_group_id(value):
 
 
 @require_POST
+@login_required
 def group_add(request):
     name = (request.POST.get("name") or "").strip()
     if not name:
@@ -975,6 +996,7 @@ def group_add(request):
 
 
 @require_POST
+@login_required
 def group_edit(request, group_id):
     group = get_object_or_404(Group, id=group_id)
     name = (request.POST.get("name") or "").strip()
@@ -999,6 +1021,7 @@ def group_edit(request, group_id):
 
 
 @require_POST
+@login_required
 def group_inline_save(request, group_id):
     group = get_object_or_404(Group, id=group_id)
     name = (request.POST.get("name") or "").strip()
@@ -1024,6 +1047,7 @@ def group_inline_save(request, group_id):
 
 
 @require_POST
+@login_required
 def group_delete(request, group_id):
     group = get_object_or_404(Group, id=group_id)
     template_count = group.templates.count()
@@ -1171,6 +1195,7 @@ def _parse_bulk_csv(csv_text: str) -> tuple[list[str], list[dict], list[str]]:
 
 
 @require_POST
+@login_required
 def template_bulk_upload(request):
     csv_text, source = _resolve_csv_source(request)
     if not csv_text:
@@ -1257,6 +1282,7 @@ def template_bulk_upload(request):
 
 # --- E6: Public holiday list ---
 
+@login_required
 def holiday_list(request):
     year = int(request.GET.get("year", timezone.localdate().year))
     month_num = int(request.GET.get("month", timezone.localdate().month))
