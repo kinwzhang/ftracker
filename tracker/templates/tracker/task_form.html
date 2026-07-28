@@ -17,7 +17,7 @@
                 </div>
                 <div class="col-md-3">
                     <label class="form-label fw500">SLA (Days)</label>
-                    <input type="number" name="sla_days" class="form-control" value="{{ task.sla_days|default:'0' }}" min="0" required>
+                    <input type="number" name="sla_days" class="form-control" value="{{ task.sla_days|default:'' }}" min="0" placeholder="Blank = no SLA">
                 </div>
                 <div class="col-md-3">
                     <label class="form-label fw500">SLA Type</label>
@@ -51,7 +51,7 @@
                     <textarea name="comments" class="form-control" rows="3">{{ task.comments|default:'' }}</textarea>
                 </div>
             </div>
-            <p class="text-muted small">Month: {{ month|date:"F Y" }} | Scheduled date is calculated automatically based on SLA.</p>
+            <p class="text-muted small">Month: {{ month|date:"F Y" }} | Leave SLA blank for no SLA; such tasks are never overdue or finished late.</p>
             <button type="submit" class="btn btn-primary px-4">Save</button>
             <a href="{% url 'task_list' %}" class="btn btn-outline-secondary px-4">Cancel</a>
         </form>

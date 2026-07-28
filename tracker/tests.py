@@ -1,11 +1,14 @@
-from datetime import date, timedelta
+from datetime import date, time, timedelta
+from datetime import datetime as dt
+from zoneinfo import ZoneInfo
 
 import json
 
 from django.test import Client, TestCase
+from django.utils import timezone
 
-from .models import AuditLog, Group, Task, TaskTemplate
-from .views import _assign_template_sort_order, _build_group_block
+from .models import AuditLog, Group, System, SystemRerun, Task, TaskTemplate
+from .views import _assign_template_sort_order, _build_group_block, task_status
 
 
 class SortOrderShiftingTests(TestCase):
@@ -116,8 +119,8 @@ class GroupBarLogicTests(TestCase):
 
     def test_group_status_completed_when_all_done(self):
         group = Group.objects.create(name="G")
-        t1 = self._make("a", -5, finished=True, completion_offset=-1)
-        t2 = self._make("b", -3, finished=True, completion_offset=-2)
+        t1 = self._make("a", -5, finished=True, completion_offset=-5)
+        t2 = self._make("b", -3, finished=True, completion_offset=-3)
         for t in (t1, t2):
             t.group = group; t.save()
         block = self._build(group, [t1, t2])
@@ -147,7 +150,7 @@ class GroupBarLogicTests(TestCase):
     def test_dominant_status_overdue_wins_over_completed(self):
         # 1 finished + 1 overdue → overdue wins (priority overdue > pending > completed).
         group = Group.objects.create(name="G")
-        done = self._make("done", -5, finished=True, completion_offset=-1)
+        done = self._make("done", -5, finished=True, completion_offset=-5)
         overdue = self._make("late", -2)
         for t in (done, overdue):
             t.group = group; t.save()
@@ -158,7 +161,7 @@ class GroupBarLogicTests(TestCase):
     def test_dominant_status_pending_wins_over_completed(self):
         # 1 finished + 1 pending (no overdue) → pending wins.
         group = Group.objects.create(name="G")
-        done = self._make("done", -5, finished=True, completion_offset=-1)
+        done = self._make("done", -5, finished=True, completion_offset=-5)
         pending = self._make("soon", 3)
         for t in (done, pending):
             t.group = group; t.save()
@@ -174,7 +177,7 @@ class GroupBarLogicTests(TestCase):
         overdue = self._make("o", -1)
         pending_a = self._make("pa", 2)
         pending_b = self._make("pb", 5)
-        done = self._make("done", -3, finished=True, completion_offset=-2)
+        done = self._make("done", -3, finished=True, completion_offset=-3)
         for t in (overdue, pending_a, pending_b, done):
             t.group = group; t.save()
         block = self._build(group, [overdue, pending_a, pending_b, done])
@@ -186,8 +189,8 @@ class GroupBarLogicTests(TestCase):
 
     def test_counts_all_completed(self):
         group = Group.objects.create(name="G")
-        t1 = self._make("a", -5, finished=True, completion_offset=-1)
-        t2 = self._make("b", -3, finished=True, completion_offset=-2)
+        t1 = self._make("a", -5, finished=True, completion_offset=-5)
+        t2 = self._make("b", -3, finished=True, completion_offset=-3)
         for t in (t1, t2):
             t.group = group; t.save()
         block = self._build(group, [t1, t2])
@@ -239,8 +242,8 @@ class GroupBarLogicTests(TestCase):
         # the group's bar visually aligned with its individual task bars,
         # which always span from day 1 to scheduled_date.
         group = Group.objects.create(name="G")
-        t1 = self._make("a", -5, finished=True, completion_offset=-1)
-        t2 = self._make("b", -3, finished=True, completion_offset=-2)
+        t1 = self._make("a", -5, finished=True, completion_offset=-5)
+        t2 = self._make("b", -3, finished=True, completion_offset=-3)
         for t in (t1, t2):
             t.group = group; t.save()
         block = self._build(group, [t1, t2])
@@ -256,9 +259,8 @@ class GroupBarLogicTests(TestCase):
         # group's current status. Previously the bar only considered the
         # unfinished tasks' scheduled_dates.
         group = Group.objects.create(name="G")
-        # Finished task scheduled for Jul 20 (way later than any unfinished).
         long_finished = self._make(
-            "long-done", 10, finished=True, completion_offset=-1,
+            "long-done", 10, finished=True, completion_offset=5,
         )
         # Unfinished tasks all within the next few days.
         short_pending = self._make("soon", 3)
@@ -289,7 +291,7 @@ class GroupBarLogicTests(TestCase):
         # bar left; the bar still spans from day 1 to the latest unfinished.
         group = Group.objects.create(name="G")
         finished_far_ago = self._make(
-            "done", -20, finished=True, completion_offset=-15,
+            "done", -20, finished=True, completion_offset=-20,
         )
         pending_late = self._make("late", 4)
         early_pending = self._make("early", 2)
@@ -1056,3 +1058,536 @@ class HolidayCalendarTests(TestCase):
         # And confirm the inverse: an actual weekday in the same month.
         self.assertTrue(is_business_day(date(2026, 4, 9)))
         self.assertTrue(is_business_day(date(2027, 12, 28)))
+
+
+# =============================================================================
+# 2026-07-28 Enhancement: Status / Finished Late / Rerun / Comment tests
+# =============================================================================
+
+
+class TaskStatusTests(TestCase):
+    """Status classification: overdue, pending, completed, finished_late."""
+
+    def setUp(self):
+        self.today = date(2026, 7, 10)
+
+    def _make(self, finished=False, scheduled_offset=0, completion_offset=None):
+        t = Task(
+            task_name="X", assigned_to="x", sla_days=1, sla_type="Working Day",
+            scheduled_date=self.today + timedelta(days=scheduled_offset),
+            finished=finished,
+            completion_date=(
+                self.today + timedelta(days=completion_offset)
+                if completion_offset is not None else None
+            ),
+            month=date(2026, 7, 1),
+        )
+        return t
+
+    def test_pending_unfinished_future(self):
+        t = self._make(finished=False, scheduled_offset=3)
+        self.assertEqual(task_status(t, self.today), "pending")
+
+    def test_overdue_unfinished_past(self):
+        t = self._make(finished=False, scheduled_offset=-3)
+        self.assertEqual(task_status(t, self.today), "overdue")
+
+    def test_completed_on_time(self):
+        t = self._make(finished=True, scheduled_offset=-5, completion_offset=-5)
+        self.assertEqual(task_status(t, self.today), "completed")
+
+    def test_completed_before_scheduled(self):
+        t = self._make(finished=True, scheduled_offset=3, completion_offset=-2)
+        self.assertEqual(task_status(t, self.today), "completed")
+
+    def test_finished_late_after_scheduled(self):
+        t = self._make(finished=True, scheduled_offset=-5, completion_offset=1)
+        self.assertEqual(task_status(t, self.today), "finished_late")
+
+    def test_completed_on_scheduled_day(self):
+        t = self._make(finished=True, scheduled_offset=0, completion_offset=0)
+        self.assertEqual(task_status(t, self.today), "completed")
+
+    def test_legacy_finished_no_completion_date(self):
+        t = self._make(finished=True, scheduled_offset=-5, completion_offset=None)
+        self.assertEqual(task_status(t, self.today), "completed")
+
+    def test_toggle_response_includes_status(self):
+        task = Task.objects.create(
+            task_name="ToggleStatus", assigned_to="x", sla_days=1,
+            sla_type="Working Day",
+            scheduled_date=date(2026, 7, 5), month=date(2026, 7, 1),
+        )
+        client = Client()
+        client.session.save()
+        response = client.post(
+            f"/task/{task.id}/toggle/",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        data = response.json()
+        self.assertIn("status", data)
+        self.assertIn("is_late", data)
+
+
+class GroupFinishedLateTests(TestCase):
+    """Group status logic with finished_late."""
+
+    def _make(self, name, scheduled_offset, finished=False, completion_offset=None):
+        today = date(2026, 7, 10)
+        scheduled = today + timedelta(days=scheduled_offset)
+        completion = today + timedelta(days=completion_offset) if completion_offset is not None else None
+        return Task.objects.create(
+            task_name=f"task-{name}", assigned_to="x", sla_days=1, sla_type="Working Day",
+            scheduled_date=scheduled, finished=finished, completion_date=completion,
+            month=date(2026, 7, 1),
+        )
+
+    def _build(self, group, tasks):
+        return _build_group_block(
+            group, tasks, date(2026, 7, 10), date(2026, 7, 1),
+            pixel_per_day=28, total_days=31,
+        )
+
+    def test_all_finished_all_on_time(self):
+        group = Group.objects.create(name="G")
+        t1 = self._make("a", -5, finished=True, completion_offset=-5)
+        t2 = self._make("b", -3, finished=True, completion_offset=-3)
+        for t in (t1, t2):
+            t.group = group; t.save()
+        block = self._build(group, [t1, t2])
+        self.assertEqual(block["summary"]["status"], "completed")
+        self.assertEqual(block["summary"]["finished_late"], 0)
+        self.assertEqual(block["summary"]["on_time"], 2)
+
+    def test_all_finished_mixed_late_and_on_time(self):
+        group = Group.objects.create(name="G")
+        t1 = self._make("a", -5, finished=True, completion_offset=-5)
+        t2 = self._make("b", -3, finished=True, completion_offset=1)
+        for t in (t1, t2):
+            t.group = group; t.save()
+        block = self._build(group, [t1, t2])
+        self.assertEqual(block["summary"]["status"], "finished_late")
+        self.assertEqual(block["summary"]["finished_late"], 1)
+        self.assertEqual(block["summary"]["on_time"], 1)
+
+    def test_unfinished_overdue_dominates_late_completed(self):
+        group = Group.objects.create(name="G")
+        late = self._make("late", -2)
+        done_late = self._make("done-late", -5, finished=True, completion_offset=1)
+        for t in (late, done_late):
+            t.group = group; t.save()
+        block = self._build(group, [late, done_late])
+        self.assertEqual(block["summary"]["status"], "overdue")
+
+    def test_unfinished_pending_dominates_late_completed(self):
+        group = Group.objects.create(name="G")
+        pending = self._make("pending", 2)
+        done_late = self._make("done-late", -5, finished=True, completion_offset=1)
+        for t in (pending, done_late):
+            t.group = group; t.save()
+        block = self._build(group, [pending, done_late])
+        self.assertEqual(block["summary"]["status"], "pending")
+
+
+class RerunModelAndEndpointTests(TestCase):
+    """System rerun CRUD tests."""
+
+    def setUp(self):
+        self.month = date(2026, 7, 1)
+        self.task = Task.objects.create(
+            task_name="RerunTask", assigned_to="x", sla_days=1,
+            sla_type="Working Day", scheduled_date=date(2026, 7, 10),
+            month=self.month,
+        )
+        self.system = System.objects.create(name="TestSystem", sort_order=1)
+        self.system2 = System.objects.create(name="OtherSystem", sort_order=2)
+        self.client = Client()
+        self.client.session.save()
+
+    def _triggered(self, day=5, hour=10):
+        return dt(2026, 7, day, hour, 0, 0, tzinfo=timezone.get_current_timezone())
+
+    def test_create_one_rerun(self):
+        response = self.client.post(
+            f"/task/{self.task.id}/reruns/create/",
+            {
+                "system": str(self.system.id),
+                "triggered_at": self._triggered(5).isoformat(),
+                "completed_at": "",
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertEqual(SystemRerun.objects.count(), 1)
+        rerun = SystemRerun.objects.first()
+        self.assertEqual(rerun.task_id, self.task.id)
+        self.assertEqual(rerun.system_id, self.system.id)
+
+    def test_create_multiple_reruns(self):
+        for i in range(3):
+            self.client.post(
+                f"/task/{self.task.id}/reruns/create/",
+                {
+                    "system": str(self.system.id),
+                    "triggered_at": self._triggered(5 + i).isoformat(),
+                    "completed_at": "",
+                },
+                HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            )
+        self.assertEqual(SystemRerun.objects.count(), 3)
+
+    def test_update_rerun(self):
+        rerun = SystemRerun.objects.create(
+            task=self.task, system=self.system,
+            triggered_at=self._triggered(5),
+        )
+        response = self.client.post(
+            f"/reruns/{rerun.id}/update/",
+            {
+                "system": str(self.system2.id),
+                "triggered_at": self._triggered(6).isoformat(),
+                "completed_at": self._triggered(6, 12).isoformat(),
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        rerun.refresh_from_db()
+        self.assertEqual(rerun.system_id, self.system2.id)
+        self.assertIsNotNone(rerun.completed_at)
+
+    def test_delete_requires_post_and_removes_target(self):
+        r1 = SystemRerun.objects.create(
+            task=self.task, system=self.system, triggered_at=self._triggered(5),
+        )
+        r2 = SystemRerun.objects.create(
+            task=self.task, system=self.system, triggered_at=self._triggered(6),
+        )
+        response = self.client.post(
+            f"/reruns/{r1.id}/delete/",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(SystemRerun.objects.count(), 1)
+        self.assertIsNone(SystemRerun.objects.filter(id=r1.id).first())
+
+    def test_missing_system_rejected(self):
+        response = self.client.post(
+            f"/task/{self.task.id}/reruns/create/",
+            {"system": "999", "triggered_at": self._triggered(5).isoformat(), "completed_at": ""},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_invalid_datetime_rejected(self):
+        response = self.client.post(
+            f"/task/{self.task.id}/reruns/create/",
+            {"system": str(self.system.id), "triggered_at": "not-a-date", "completed_at": ""},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["ok"])
+
+    def test_completion_earlier_than_trigger_rejected(self):
+        response = self.client.post(
+            f"/task/{self.task.id}/reruns/create/",
+            {
+                "system": str(self.system.id),
+                "triggered_at": self._triggered(10).isoformat(),
+                "completed_at": self._triggered(5).isoformat(),
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["ok"])
+
+    def test_incomplete_rerun_is_active(self):
+        rerun = SystemRerun.objects.create(
+            task=self.task, system=self.system, triggered_at=self._triggered(5),
+        )
+        self.assertIsNone(rerun.completed_at)
+
+    def test_cross_task_tampering_rejected(self):
+        other_task = Task.objects.create(
+            task_name="Other", assigned_to="x", sla_days=1,
+            sla_type="Working Day", scheduled_date=date(2026, 7, 10),
+            month=self.month,
+        )
+        rerun = SystemRerun.objects.create(
+            task=other_task, system=self.system, triggered_at=self._triggered(5),
+        )
+        response = self.client.post(
+            f"/reruns/{rerun.id}/update/",
+            {
+                "system": str(self.system.id),
+                "triggered_at": self._triggered(6).isoformat(),
+                "completed_at": "",
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_month_scoping(self):
+        next_month = date(2026, 8, 1)
+        task_next = Task.objects.create(
+            task_name="Next", assigned_to="x", sla_days=1, sla_type="Working Day",
+            scheduled_date=date(2026, 8, 10), month=next_month,
+        )
+        SystemRerun.objects.create(
+            task=self.task, system=self.system, triggered_at=self._triggered(5),
+        )
+        SystemRerun.objects.create(
+            task=task_next, system=self.system, triggered_at=dt(2026, 8, 5, 10, 0, 0, tzinfo=timezone.get_current_timezone()),
+        )
+        month_reruns = SystemRerun.objects.filter(task__month=self.month)
+        self.assertEqual(month_reruns.count(), 1)
+
+
+class RerunGanttTests(TestCase):
+    """Rerun Gantt bar geometry and grouping."""
+
+    def setUp(self):
+        self.month = date(2026, 7, 1)
+        self.task = Task.objects.create(
+            task_name="GanttRerun", assigned_to="x", sla_days=1,
+            sla_type="Working Day", scheduled_date=date(2026, 7, 10),
+            month=self.month,
+        )
+        self.system = System.objects.create(name="SysA", sort_order=1)
+
+    def _rerun(self, day, hour=10, completed_day=None, completed_hour=None):
+        from datetime import datetime as dt
+        triggered = dt(2026, 7, day, hour, 0, 0, tzinfo=timezone.get_current_timezone())
+        completed = None
+        if completed_day is not None:
+            completed = dt(2026, 7, completed_day, completed_hour or hour, 0, 0, tzinfo=timezone.get_current_timezone())
+        return SystemRerun.objects.create(
+            task=self.task, system=self.system,
+            triggered_at=triggered, completed_at=completed,
+        )
+
+    def test_same_day_rerun_produces_bar(self):
+        from tracker.views import _gantt_rerun_bar
+        rerun = self._rerun(5, 10, 5, 12)
+        bar = _gantt_rerun_bar(rerun, self.month, 31, 28)
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar["system_name"], "SysA")
+        self.assertFalse(bar["is_active"])
+
+    def test_multi_day_rerun_span(self):
+        from tracker.views import _gantt_rerun_bar
+        rerun = self._rerun(5, 10, 8, 12)
+        bar = _gantt_rerun_bar(rerun, self.month, 31, 28)
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar["trigger_date"], date(2026, 7, 5))
+        self.assertEqual(bar["end_date"], date(2026, 7, 8))
+
+    def test_active_rerun_ends_at_today(self):
+        from tracker.views import _gantt_rerun_bar
+        rerun = self._rerun(5, 10)
+        bar = _gantt_rerun_bar(rerun, self.month, 31, 28)
+        self.assertIsNotNone(bar)
+        self.assertTrue(bar["is_active"])
+
+    def test_collapsed_total_and_expanded_grouping(self):
+        from tracker.views import _build_rerun_gantt
+        r1 = self._rerun(5, 10, 5, 12)
+        r2 = self._rerun(8, 10, 8, 14)
+        reruns = SystemRerun.objects.all()
+        gantt = _build_rerun_gantt(reruns, self.month, 31, 28)
+        self.assertEqual(gantt["total"], 2)
+        self.assertEqual(len(gantt["collapsed_bars"]), 2)
+        self.assertEqual(len(gantt["expanded_systems"]), 1)
+
+    def test_multiple_reruns_per_system_distinct(self):
+        from tracker.views import _build_rerun_gantt
+        self._rerun(5, 10, 5, 12)
+        self._rerun(10, 10, 12, 14)
+        reruns = SystemRerun.objects.all()
+        gantt = _build_rerun_gantt(reruns, self.month, 31, 28)
+        self.assertEqual(len(gantt["expanded_systems"][0]["bars"]), 2)
+
+    def test_empty_rerun_gantt(self):
+        from tracker.views import _build_rerun_gantt
+        gantt = _build_rerun_gantt([], self.month, 31, 28)
+        self.assertEqual(gantt["total"], 0)
+        self.assertEqual(len(gantt["collapsed_bars"]), 0)
+        self.assertEqual(len(gantt["expanded_systems"]), 0)
+
+    def test_accessible_text_includes_info(self):
+        from tracker.views import _gantt_rerun_bar
+        rerun = self._rerun(5, 10, 5, 12)
+        bar = _gantt_rerun_bar(rerun, self.month, 31, 28)
+        self.assertIn("SysA", bar["system_name"])
+        self.assertIn("GanttRerun", bar["task_name"])
+
+
+class CommentTests(TestCase):
+    """Multiline comments, comment table, and HTML escaping."""
+
+    def setUp(self):
+        self.month = date(2026, 7, 1)
+        self.task = Task.objects.create(
+            task_name="CommentTask", assigned_to="x", sla_days=1,
+            sla_type="Working Day", scheduled_date=date(2026, 7, 10),
+            month=self.month, comments="",
+        )
+        self.client = Client()
+        session = self.client.session
+        session["current_month"] = self.month.isoformat()
+        session.save()
+
+    def test_multiline_comment_persists(self):
+        multiline = "Line one\nLine two\nLine three"
+        response = self.client.post(
+            f"/task/{self.task.id}/comment/",
+            {"comments": multiline},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.comments, multiline)
+
+    def test_comment_table_absent_with_no_comments(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["comment_tasks"]), 0)
+
+    def test_comment_table_present_with_substantive_comment(self):
+        self.task.comments = "Has content"
+        self.task.save()
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(len(response.context["comment_tasks"]), 0)
+        body = response.content.decode()
+        self.assertIn("Has content", body)
+
+    def test_whitespace_only_comment_empty(self):
+        self.task.comments = "   \n  \n  "
+        self.task.save()
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["comment_tasks"]), 0)
+
+    def test_html_comment_content_is_escaped(self):
+        self.task.comments = "<script>alert('xss')</script>"
+        self.task.save()
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertIn("&lt;script&gt;", body)
+        self.assertIn("&lt;/script&gt;", body)
+
+
+class NoSLAFixesTests(TestCase):
+    """Confirmed 2026-07-28 behavior for explicitly blank SLAs."""
+
+    def setUp(self):
+        self.month = date(2026, 7, 1)
+        self.task = Task.objects.create(
+            task_name="No SLA", assigned_to="x", sla_days=None,
+            sla_type="Working Day", scheduled_date=None, month=self.month,
+        )
+
+    def test_no_sla_is_never_overdue_or_late(self):
+        self.assertEqual(task_status(self.task, date(2030, 1, 1)), "pending")
+        self.task.finished = True
+        self.task.completion_date = date(2030, 1, 1)
+        self.assertEqual(task_status(self.task, date(2030, 1, 1)), "completed")
+
+    def test_mixed_sla_group_builds_without_type_error(self):
+        dated = Task.objects.create(
+            task_name="Dated", assigned_to="x", sla_days=1,
+            sla_type="Working Day", scheduled_date=date(2026, 7, 2), month=self.month,
+        )
+        block = _build_group_block(
+            None, [self.task, dated], date(2026, 7, 10), self.month, 28, 31,
+        )
+        self.assertEqual(len(block["tasks"]), 2)
+        self.assertEqual(len(block["gantt_tasks"]), 1)
+
+    def test_inline_blank_sla_clears_deadline(self):
+        self.task.sla_days = 3
+        self.task.scheduled_date = date(2026, 7, 3)
+        self.task.save()
+        response = Client().post(
+            f"/task/{self.task.id}/inline-save/",
+            {"task_name": self.task.task_name, "assigned_to": "x", "sla_days": "",
+             "sla_type": "Working Day", "completion_date": "", "comments": ""},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.task.refresh_from_db()
+        self.assertIsNone(self.task.sla_days)
+        self.assertIsNone(self.task.scheduled_date)
+
+    def test_blank_sla_csv_creates_no_sla_template(self):
+        response = Client().post(
+            "/templates/bulk-upload/",
+            {"csv_text": "task_name,assigned_to,sla_days,sla_type\nNo deadline,Alice,,Working Day\n"},
+        )
+        self.assertEqual(response.status_code, 302)
+        template = TaskTemplate.objects.get(task_name="No deadline")
+        self.assertIsNone(template.sla_days)
+
+    def test_zero_sla_remains_distinct_from_blank(self):
+        template = TaskTemplate.objects.create(
+            task_name="Zero", assigned_to="x", sla_days=0, sla_type="Calendar Day",
+        )
+        self.assertEqual(template.sla_days, 0)
+
+
+class SystemManagementTests(TestCase):
+    def test_dashboard_renders(self):
+        response = Client().get("/dashboard/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_template_tab_adds_user_provided_system_for_rerun_dropdown(self):
+        response = Client().post("/systems/add/", {"name": "Settlement Engine"})
+        self.assertEqual(response.status_code, 302)
+        system = System.objects.get(name="Settlement Engine")
+        Task.objects.create(
+            task_name="Needs rerun", assigned_to="x", sla_days=1,
+            sla_type="Working Day", scheduled_date=date(2026, 7, 1),
+            month=date(2026, 7, 1),
+        )
+        page = Client().get("/")
+        self.assertContains(page, f'<option value="{system.id}">Settlement Engine</option>', html=False)
+
+    def test_duplicate_system_name_is_not_created(self):
+        System.objects.create(name="Gateway")
+        Client().post("/systems/add/", {"name": " gateway "})
+        self.assertEqual(System.objects.filter(name__iexact="gateway").count(), 1)
+
+    def test_system_can_be_renamed_inline(self):
+        system = System.objects.create(name="Before")
+        response = Client().post(
+            f"/systems/{system.id}/inline-save/", {"name": "After"},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        system.refresh_from_db()
+        self.assertEqual(system.name, "After")
+
+    def test_system_without_reruns_can_be_deleted(self):
+        system = System.objects.create(name="Unused")
+        response = Client().post(f"/systems/{system.id}/delete/")
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(System.objects.filter(id=system.id).exists())
+
+    def test_system_with_reruns_cannot_be_deleted(self):
+        system = System.objects.create(name="Used")
+        task = Task.objects.create(
+            task_name="Task", assigned_to="x", sla_days=1, sla_type="Working Day",
+            scheduled_date=date(2026, 7, 1), month=date(2026, 7, 1),
+        )
+        SystemRerun.objects.create(task=task, system=system, triggered_at=timezone.now())
+        response = Client().post(f"/systems/{system.id}/delete/")
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(System.objects.filter(id=system.id).exists())

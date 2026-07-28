@@ -2,11 +2,12 @@ import csv
 import io
 import json
 from calendar import monthrange
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.contrib import messages
 from django.db import transaction
 from django.db.models import Count, F, Max, Q
+from django.db.models.deletion import ProtectedError
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render, get_object_or_404
 from django.template.loader import render_to_string
@@ -14,7 +15,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from .holidays import calculate_scheduled_date, hk_public_holidays, hk_public_holidays_named
-from .models import AuditLog, Group, Task, TaskTemplate
+from .models import AuditLog, Group, System, SystemRerun, Task, TaskTemplate, task_status
 
 
 def _get_current_month(request):
@@ -29,8 +30,12 @@ def _get_current_month(request):
     return date(today.year, today.month, 1)
 
 
-def _gantt_bar_for_task(task, month, pixel_per_day, total_days):
-    """Compute percentage left/width for an individual task bar in the Gantt chart."""
+def _gantt_bar_for_task(task, month, pixel_per_day, total_days, today=None):
+    """Compute percentage left/width for an individual task bar in the Gantt chart.
+    Returns None for tasks without a scheduled_date (no SLA).
+    """
+    if task.scheduled_date is None:
+        return None
     start = task.month
     end = task.scheduled_date if task.scheduled_date >= start else start
     duration_days = (end - start).days + 1
@@ -39,10 +44,147 @@ def _gantt_bar_for_task(task, month, pixel_per_day, total_days):
         offset_days = 0
     left_pct = (offset_days + 0.15) / total_days * 100
     width_pct = max((duration_days - 0.3) / total_days * 100, 1.0)
+    today = today or date.today()
+    status = task_status(task, today)
     return {
         "task": task,
         "start_offset": left_pct,
         "duration": width_pct,
+        "status": status,
+    }
+
+
+def _gantt_rerun_bar(rerun, month, total_days, pixel_per_day):
+    """Compute percentage left/width for a system-rerun interval bar.
+
+    Returns dict with left_pct, width_pct, and a label-friendly status.
+    Same-day reruns produce a visible 1-day marker. Active reruns
+    (no completed_at) end at today, clamped to the visible month.
+    """
+    from datetime import timezone as dt_timezone
+    trigger_local = timezone.localtime(rerun.triggered_at)
+    trigger_date = trigger_local.date()
+
+    if rerun.completed_at:
+        completed_local = timezone.localtime(rerun.completed_at)
+        end_date = completed_local.date()
+    else:
+        end_date = timezone.localdate()
+
+    month_start = month
+    if month.month == 12:
+        month_end = date(month.year + 1, 1, 1)
+    else:
+        month_end = date(month.year, month.month + 1, 1)
+
+    clip_start = trigger_date if trigger_date >= month_start else month_start
+    clip_end = end_date if end_date < month_end else month_end - timedelta(days=1)
+
+    if clip_start > clip_end or clip_start >= month_end:
+        return None
+
+    offset_days = (clip_start - month).days
+    duration_days = (clip_end - clip_start).days + 1
+
+    left_pct = (offset_days + 0.15) / total_days * 100
+    width_pct = max((duration_days - 0.3) / total_days * 100, 1.0)
+
+    is_active = rerun.completed_at is None
+    end = rerun.completed_at or timezone.now()
+    dur_seconds = (end - rerun.triggered_at).total_seconds()
+    return {
+        "rerun": rerun,
+        "left_pct": left_pct,
+        "width_pct": width_pct,
+        "is_active": is_active,
+        "trigger_date": trigger_date,
+        "end_date": end_date,
+        "system_name": rerun.system.name,
+        "task_name": rerun.task.task_name,
+        "duration_str": _format_duration(dur_seconds),
+    }
+
+
+def _format_duration(seconds):
+    """Format a duration in seconds as compact 'Xd Yh Zm'."""
+    seconds = int(seconds)
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if not parts:
+        parts.append(f"{seconds}s")
+    return " ".join(parts)
+
+
+def _allocate_lanes(bars):
+    """Assign a non-overlapping lane to each bar using a simple greedy algorithm.
+    Each bar has left_pct/width_pct; returns a list with 'lane' added.
+    """
+    if not bars:
+        return bars
+    intervals = []
+    for i, bar in enumerate(bars):
+        left = bar["left_pct"]
+        right = bar["left_pct"] + bar["width_pct"]
+        intervals.append((left, right, i))
+    intervals.sort()
+    lanes = []
+    result = list(bars)
+    for left, right, idx in intervals:
+        placed = False
+        for lane_idx, lane_end in enumerate(lanes):
+            if left >= lane_end:
+                lanes[lane_idx] = right
+                result[idx] = dict(bars[idx], lane=lane_idx, top_px=lane_idx * 24 + 1)
+                placed = True
+                break
+        if not placed:
+            lanes.append(right)
+            lane_idx = len(lanes) - 1
+            result[idx] = dict(bars[idx], lane=lane_idx, top_px=lane_idx * 24 + 1)
+    return result
+
+
+def _build_rerun_gantt(reruns, month, total_days, pixel_per_day):
+    """Build the rerun Gantt section.
+
+    Returns a dict:
+      collapsed_bars: list of all rerun bars with lane assignment (one track)
+      expanded_systems: list of {system_name, bars} per system with lanes
+      total: count of reruns
+    """
+    bars_by_system: dict[str, list] = {}
+    all_bars = []
+    for rerun in reruns:
+        bar = _gantt_rerun_bar(rerun, month, total_days, pixel_per_day)
+        if bar is None:
+            continue
+        all_bars.append(bar)
+        bars_by_system.setdefault(rerun.system.name, []).append(bar)
+
+    collapsed = _allocate_lanes(all_bars)
+    expanded = [
+        {
+            "system_name": name,
+            "bars": _allocate_lanes(bars),
+        }
+        for name, bars in sorted(bars_by_system.items())
+    ]
+    for item in expanded:
+        item["track_height"] = max(24, 24 * (max((b["lane"] for b in item["bars"]), default=0) + 1))
+
+    return {
+        "collapsed_bars": collapsed,
+        "collapsed_track_height": max(24, 24 * (max((b["lane"] for b in collapsed), default=0) + 1)),
+        "expanded_systems": expanded,
+        "total": len(reruns),
     }
 
 
@@ -68,29 +210,40 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day, total
     """
     unfinished = sorted(
         [t for t in tasks_in_group if not t.finished],
-        key=lambda t: t.scheduled_date,
+        key=lambda t: (t.scheduled_date is None, t.scheduled_date or date.max),
     )
     finished = sorted(
         [t for t in tasks_in_group if t.finished],
-        key=lambda t: t.completion_date or t.scheduled_date,
+        key=lambda t: (
+            (t.completion_date or t.scheduled_date) is None,
+            t.completion_date or t.scheduled_date or date.max,
+        ),
     )
     ordered_tasks = unfinished + finished
 
-    gantt_tasks = [
-        _gantt_bar_for_task(t, month, pixel_per_day, total_days) for t in ordered_tasks
+    gantt_tasks_raw = [
+        _gantt_bar_for_task(t, month, pixel_per_day, total_days, today) for t in ordered_tasks
     ]
+    gantt_tasks = [g for g in gantt_tasks_raw if g is not None]
 
     total_count = len(tasks_in_group)
     overdue_count = sum(
-        1 for t in tasks_in_group if not t.finished and t.scheduled_date < today
+        1 for t in tasks_in_group
+        if not t.finished and t.scheduled_date is not None and t.scheduled_date < today
     )
     pending_count = sum(
-        1 for t in tasks_in_group if not t.finished and t.scheduled_date >= today
+        1 for t in tasks_in_group
+        if not t.finished and (t.scheduled_date is None or t.scheduled_date >= today)
     )
-    completed_count = sum(1 for t in tasks_in_group if t.finished)
+    finished_count = sum(1 for t in tasks_in_group if t.finished)
+    finished_late_count = sum(
+        1 for t in tasks_in_group
+        if t.finished and t.completion_date and t.scheduled_date
+        and t.completion_date > t.scheduled_date
+    )
+    on_time_count = finished_count - finished_late_count
 
-    # Dominant status priority: overdue > pending > completed. Mirrors the
-    # status priority used elsewhere (E2.1) and the task-list row tints.
+    # Dominant status priority: overdue > pending > finished_late/completed.
     if total_count == 0:
         status = "pending"
     elif overdue_count > 0:
@@ -98,33 +251,30 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day, total
     elif pending_count > 0:
         status = "pending"
     else:
-        status = "completed"
+        # All finished — finished_late wins if any member is late.
+        status = "finished_late" if finished_late_count > 0 else "completed"
 
     if total_count == 0:
         group_bar = None
     else:
-        # B7: bar length always tracks the longest task in the group, no
-        # matter its completion status. scheduled_date is what defines a
-        # task's footprint on the Gantt canvas (its bar always starts at
-        # day 1 of the month), so we use it instead of completion_date.
-        bar_end = max(t.scheduled_date for t in tasks_in_group)
-        # Clamp bar_end so we never paint past the end of the displayed month.
-        last_day = month.replace(day=monthrange(month.year, month.month)[1])
-        if bar_end > last_day:
-            bar_end = last_day
+        dates_with_sla = [t.scheduled_date for t in tasks_in_group if t.scheduled_date is not None]
+        if dates_with_sla:
+            bar_end = max(dates_with_sla)
+            last_day = month.replace(day=monthrange(month.year, month.month)[1])
+            if bar_end > last_day:
+                bar_end = last_day
+            offset_days = (month - month).days
+            duration_days = (bar_end - month).days + 1
+            left_pct = (offset_days + 0.15) / total_days * 100
+            width_pct = max((duration_days - 0.3) / total_days * 100, 1.0)
+            group_bar = {
+                "start_offset": left_pct,
+                "width": width_pct,
+                "status": status,
+            }
+        else:
+            group_bar = None
 
-        offset_days = (month - month).days  # 0; bar always starts at day 1.
-        duration_days = (bar_end - month).days + 1
-        left_pct = (offset_days + 0.15) / total_days * 100
-        width_pct = max((duration_days - 0.3) / total_days * 100, 1.0)
-        group_bar = {
-            "start_offset": left_pct,
-            "width": width_pct,
-            "status": status,
-        }
-
-    # Use the group's real id, or 0 for the ungrouped bucket. The id is used
-    # by the template to wire up expand/collapse sync between Gantt and table.
     block_id = group.id if group is not None else 0
     return {
         "id": block_id,
@@ -133,9 +283,11 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day, total
         "gantt_tasks": gantt_tasks,
         "summary": {
             "total": total_count,
-            "completed": completed_count,
+            "completed": finished_count,
             "pending": pending_count,
             "overdue": overdue_count,
+            "finished_late": finished_late_count,
+            "on_time": on_time_count,
             "status": status,
         },
         "group_bar": group_bar,
@@ -210,11 +362,54 @@ def task_list(request):
     completed = sum(1 for t in tasks_raw if t.finished)
     pending = sum(1 for t in tasks_raw if not t.finished)
     overdue = sum(
-        1 for t in tasks_raw if not t.finished and t.scheduled_date < today
+        1 for t in tasks_raw
+        if not t.finished and t.scheduled_date is not None and t.scheduled_date < today
+    )
+    finished_late_count = sum(
+        1 for t in tasks_raw
+        if t.finished and t.completion_date and t.scheduled_date
+        and t.completion_date > t.scheduled_date
     )
 
+    # System reruns whose interval overlaps the selected calendar month.
+    # Include reruns where any part of [triggered_at, completed_at or today]
+    # falls within the month. Active reruns use today as the provisional end.
+    month_start_dt = timezone.make_aware(datetime.combine(month, time.min))
+    next_month_date = date(month.year + 1, 1, 1) if month.month == 12 else date(month.year, month.month + 1, 1)
+    month_end_dt = timezone.make_aware(datetime.combine(next_month_date, time.min))
+    today_local = timezone.localdate()
+    today_dt = timezone.make_aware(datetime.combine(today_local, time.min))
+
+    active_overlap = Q(completed_at__isnull=True, triggered_at__lt=today_dt + timedelta(days=1))
+    if today_dt + timedelta(days=1) <= month_start_dt:
+        active_overlap = Q(pk__in=[])
+    reruns = SystemRerun.objects.filter(
+        triggered_at__lt=month_end_dt,
+    ).filter(
+        active_overlap | Q(completed_at__gte=month_start_dt)
+    ).select_related("system", "task")
+
+    # Task editing shows complete history; Gantt/dashboard use the month-overlap query above.
+    task_history = SystemRerun.objects.filter(task_id__in=[t.id for t in tasks_raw]).select_related("system")
+    reruns_by_task: dict[int, list] = {}
+    for r in task_history:
+        reruns_by_task.setdefault(r.task_id, []).append(r)
+    for r in reruns:
+        end = r.completed_at or timezone.now()
+        r.duration_seconds = (end - r.triggered_at).total_seconds()
+        r.duration_str = _format_duration(r.duration_seconds)
+
+    # Build rerun Gantt data.
+    rerun_gantt_entries = _build_rerun_gantt(reruns, month, total_days, pixel_per_day)
+
+    for t in tasks_raw:
+        t.computed_status = task_status(t, today)
+        t.computed_reruns = reruns_by_task.get(t.id, [])
+
+    # Collect tasks with substantive comments for the comments table.
+    comment_tasks = [t for t in tasks_raw if t.comments.strip()]
+
     # Flat list of every task, in the same order they appear across blocks.
-    # Useful for templates that want to iterate all rows regardless of group.
     all_tasks = []
     for block in group_blocks:
         all_tasks.extend(block["tasks"])
@@ -226,6 +421,7 @@ def task_list(request):
             "tasks": all_tasks,
             "templates": templates,
             "groups": Group.objects.all(),
+            "systems": System.objects.all(),
             "month": month,
             "months": list(range(1, 13)),
             "days_in_month": days_in_month,
@@ -239,6 +435,11 @@ def task_list(request):
             "completed_count": completed,
             "pending_count": pending,
             "overdue_count": overdue,
+            "finished_late_count": finished_late_count,
+            "reruns_by_task": reruns_by_task,
+            "rerun_gantt_total": len(reruns),
+            "rerun_gantt_entries": rerun_gantt_entries,
+            "comment_tasks": comment_tasks,
         },
     )
 
@@ -268,12 +469,13 @@ def task_toggle_finished(request, task_id):
         },
     )
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-        # B9: client-side update path; return the formatted completion string
-        # so the row's "Completed At" cell can be updated without reloading.
+        status = task_status(task, timezone.localdate())
         return JsonResponse({
             "ok": True,
             "finished": task.finished,
             "completion_display": _format_completion(task),
+            "status": status,
+            "is_late": status == "finished_late",
         })
     return redirect("task_list")
 
@@ -329,11 +531,15 @@ def task_add(request):
     if request.method == "POST":
         task_name = request.POST.get("task_name")
         assigned_to = request.POST.get("assigned_to")
-        sla_days = int(request.POST.get("sla_days", 0))
+        sla_days_raw = request.POST.get("sla_days", "").strip()
+        sla_days = int(sla_days_raw) if sla_days_raw else None
         sla_type = request.POST.get("sla_type", "Working Day")
         comments = request.POST.get("comments", "")
         month = _get_current_month(request)
-        scheduled_date = calculate_scheduled_date(month, sla_days, sla_type)
+        if sla_days is not None:
+            scheduled_date = calculate_scheduled_date(month, sla_days, sla_type)
+        else:
+            scheduled_date = None
         group_id = _parse_group_id(request.POST.get("group"))
 
         task = Task.objects.create(
@@ -379,7 +585,8 @@ def task_edit(request, task_id):
         }
         task.task_name = request.POST.get("task_name", task.task_name)
         task.assigned_to = request.POST.get("assigned_to", task.assigned_to)
-        task.sla_days = int(request.POST.get("sla_days", task.sla_days))
+        sla_raw = request.POST.get("sla_days", "").strip()
+        task.sla_days = int(sla_raw) if sla_raw else None
         task.sla_type = request.POST.get("sla_type", task.sla_type)
         finished = request.POST.get("finished") == "on"
         task.finished = finished
@@ -388,7 +595,10 @@ def task_edit(request, task_id):
         )
         task.comments = request.POST.get("comments", "")
         task.group_id = _parse_group_id(request.POST.get("group"))
-        task.scheduled_date = calculate_scheduled_date(task.month, task.sla_days, task.sla_type)
+        if task.sla_days is not None:
+            task.scheduled_date = calculate_scheduled_date(task.month, task.sla_days, task.sla_type)
+        else:
+            task.scheduled_date = None
         task.save()
 
         new_values = {
@@ -438,7 +648,9 @@ def _apply_task_updates(task, payload):
     }
     task.task_name = payload.get("task_name", task.task_name)
     task.assigned_to = payload.get("assigned_to", task.assigned_to)
-    task.sla_days = int(payload.get("sla_days", task.sla_days))
+    if "sla_days" in payload:
+        sla_raw = payload.get("sla_days", "")
+        task.sla_days = int(sla_raw) if str(sla_raw).strip() else None
     task.sla_type = payload.get("sla_type", task.sla_type)
     task.completion_date, task.completion_time = _parse_completion(
         payload.get("completion_date", "") or ""
@@ -446,9 +658,12 @@ def _apply_task_updates(task, payload):
     task.comments = payload.get("comments", task.comments)
     if "group" in payload:
         task.group_id = _parse_group_id(payload.get("group"))
-    task.scheduled_date = calculate_scheduled_date(
-        task.month, task.sla_days, task.sla_type
-    )
+    if task.sla_days is not None:
+        task.scheduled_date = calculate_scheduled_date(
+            task.month, task.sla_days, task.sla_type
+        )
+    else:
+        task.scheduled_date = None
     task.save()
     new_values = {
         "task_name": task.task_name,
@@ -476,7 +691,7 @@ def task_inline_save(request, task_id):
     if request.headers.get("X-Requested-With") == "XMLHttpRequest":
         return JsonResponse({
             "ok": True,
-            "scheduled_date": task.scheduled_date.isoformat(),
+            "scheduled_date": task.scheduled_date.isoformat() if task.scheduled_date else "",
             "sla_type_short": "WD" if task.sla_type == "Working Day" else "CD",
         })
     return redirect("task_list")
@@ -590,6 +805,176 @@ def task_delete(request, task_id):
     return redirect("task_list")
 
 
+# --- System rerun CRUD ---
+
+@require_POST
+def task_rerun_create(request, task_id):
+    task = get_object_or_404(Task, id=task_id)
+    try:
+        system_id = int(request.POST.get("system", ""))
+        triggered_at_str = request.POST.get("triggered_at", "").strip()
+        completed_at_str = request.POST.get("completed_at", "").strip() or None
+    except (ValueError, TypeError):
+        return JsonResponse({"ok": False, "error": "Invalid parameters"}, status=400)
+
+    system = get_object_or_404(System, id=system_id)
+    if not triggered_at_str:
+        return JsonResponse({"ok": False, "error": "triggered_at is required"}, status=400)
+
+    try:
+        from django.utils.dateparse import parse_datetime
+        triggered_at = parse_datetime(triggered_at_str)
+        if triggered_at is None:
+            raise ValueError
+        if not timezone.is_aware(triggered_at):
+            triggered_at = timezone.make_aware(triggered_at)
+    except (ValueError, TypeError):
+        return JsonResponse({"ok": False, "error": "Invalid triggered_at datetime"}, status=400)
+
+    completed_at = None
+    if completed_at_str:
+        try:
+            completed_at = parse_datetime(completed_at_str)
+            if completed_at is None:
+                raise ValueError
+            if not timezone.is_aware(completed_at):
+                completed_at = timezone.make_aware(completed_at)
+            if completed_at < triggered_at:
+                return JsonResponse(
+                    {"ok": False, "error": "completed_at must not be earlier than triggered_at"},
+                    status=400,
+                )
+        except (ValueError, TypeError):
+            return JsonResponse({"ok": False, "error": "Invalid completed_at datetime"}, status=400)
+
+    rerun = SystemRerun.objects.create(
+        task=task,
+        system=system,
+        triggered_at=triggered_at,
+        completed_at=completed_at,
+    )
+    AuditLog.objects.create(
+        task=task,
+        task_name=task.task_name,
+        action="rerun_created",
+        changes={
+            "system": system.name,
+            "triggered_at": triggered_at.isoformat(),
+        },
+    )
+    return JsonResponse({
+        "ok": True,
+        "id": rerun.id,
+        "system_id": system.id,
+        "system_name": system.name,
+        "triggered_at": triggered_at.isoformat(),
+        "completed_at": completed_at.isoformat() if completed_at else None,
+        "is_active": completed_at is None,
+    })
+
+
+@require_POST
+def task_rerun_update(request, rerun_id):
+    rerun = get_object_or_404(SystemRerun, id=rerun_id)
+    try:
+        system_id = int(request.POST.get("system", ""))
+        triggered_at_str = request.POST.get("triggered_at", "").strip()
+        completed_at_str = request.POST.get("completed_at", "").strip() or None
+    except (ValueError, TypeError):
+        return JsonResponse({"ok": False, "error": "Invalid parameters"}, status=400)
+
+    system = get_object_or_404(System, id=system_id)
+    if not triggered_at_str:
+        return JsonResponse({"ok": False, "error": "triggered_at is required"}, status=400)
+
+    try:
+        from django.utils.dateparse import parse_datetime
+        triggered_at = parse_datetime(triggered_at_str)
+        if triggered_at is None:
+            raise ValueError
+        if not timezone.is_aware(triggered_at):
+            triggered_at = timezone.make_aware(triggered_at)
+    except (ValueError, TypeError):
+        return JsonResponse({"ok": False, "error": "Invalid triggered_at datetime"}, status=400)
+
+    completed_at = None
+    if completed_at_str:
+        try:
+            completed_at = parse_datetime(completed_at_str)
+            if completed_at is None:
+                raise ValueError
+            if not timezone.is_aware(completed_at):
+                completed_at = timezone.make_aware(completed_at)
+            if completed_at < triggered_at:
+                return JsonResponse(
+                    {"ok": False, "error": "completed_at must not be earlier than triggered_at"},
+                    status=400,
+                )
+        except (ValueError, TypeError):
+            return JsonResponse({"ok": False, "error": "Invalid completed_at datetime"}, status=400)
+
+    old_system_name = rerun.system.name
+    rerun.system = system
+    rerun.triggered_at = triggered_at
+    rerun.completed_at = completed_at
+    rerun.save()
+
+    AuditLog.objects.create(
+        task=rerun.task,
+        task_name=rerun.task.task_name,
+        action="rerun_updated",
+        changes={
+            "system": system.name,
+            "triggered_at": triggered_at.isoformat(),
+        },
+    )
+    return JsonResponse({
+        "ok": True,
+        "id": rerun.id,
+        "system_id": system.id,
+        "system_name": system.name,
+        "triggered_at": triggered_at.isoformat(),
+        "completed_at": completed_at.isoformat() if completed_at else None,
+        "is_active": completed_at is None,
+    })
+
+
+@require_POST
+def task_rerun_delete(request, rerun_id):
+    rerun = get_object_or_404(SystemRerun, id=rerun_id)
+    task = rerun.task
+    system_name = rerun.system.name
+    triggered_at = rerun.triggered_at
+    rerun.delete()
+    AuditLog.objects.create(
+        task=task,
+        task_name=task.task_name,
+        action="rerun_deleted",
+        changes={
+            "system": system_name,
+            "triggered_at": triggered_at.isoformat(),
+        },
+    )
+    return JsonResponse({"ok": True})
+
+
+@require_POST
+def task_rerun_list(request, task_id):
+    task = get_object_or_404(Task, id=task_id)
+    reruns = task.system_reruns.select_related("system").all()
+    data = []
+    for r in reruns:
+        data.append({
+            "id": r.id,
+            "system_id": r.system.id,
+            "system_name": r.system.name,
+            "triggered_at": r.triggered_at.isoformat(),
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "is_active": r.completed_at is None,
+        })
+    return JsonResponse({"ok": True, "reruns": data})
+
+
 # --- Dashboard (E1 stats are also on main page now) ---
 
 def dashboard(request):
@@ -600,8 +985,58 @@ def dashboard(request):
     total = tasks.count()
     completed = tasks.filter(finished=True).count()
     pending = tasks.filter(finished=False).count()
-    overdue = tasks.filter(finished=False, scheduled_date__lt=today).count()
+    overdue = sum(
+        1 for t in tasks
+        if not t.finished and t.scheduled_date is not None and t.scheduled_date < today
+    )
+    finished_late_count = sum(
+        1 for t in tasks
+        if t.finished and t.completion_date and t.scheduled_date and t.completion_date > t.scheduled_date
+    )
+    on_time_count = completed - finished_late_count
     completion_rate = round(completed / total * 100, 1) if total > 0 else 0
+
+    # System rerun statistics — month-overlap scoping
+    month_start_dt = timezone.make_aware(datetime.combine(month, time.min))
+    next_month_d = date(month.year + 1, 1, 1) if month.month == 12 else date(month.year, month.month + 1, 1)
+    month_end_dt = timezone.make_aware(datetime.combine(next_month_d, time.min))
+    today_local = timezone.localdate()
+    today_dt = timezone.make_aware(datetime.combine(today_local, time.min))
+    month_reruns = SystemRerun.objects.filter(
+        triggered_at__lt=month_end_dt,
+    ).filter(
+        Q(completed_at__isnull=True, triggered_at__lt=today_dt + timedelta(days=1)) |
+        Q(completed_at__gte=month_start_dt)
+    ).select_related("system", "task")
+    total_reruns = month_reruns.count()
+    completed_reruns = month_reruns.filter(completed_at__isnull=False).count()
+    active_reruns = total_reruns - completed_reruns
+    distinct_tasks = month_reruns.values("task").distinct().count()
+    distinct_systems = month_reruns.values("system").distinct().count()
+
+    durations = []
+    for r in month_reruns:
+        end = r.completed_at or timezone.now()
+        dur = (end - r.triggered_at).total_seconds()
+        durations.append(dur)
+    avg_duration = sum(durations) / len(durations) if durations else 0
+    max_duration = max(durations) if durations else 0
+
+    # Detailed rerun entries for the table
+    rerun_entries = month_reruns.order_by("-triggered_at")
+    for r in rerun_entries:
+        end = r.completed_at or timezone.now()
+        r.duration_seconds = (end - r.triggered_at).total_seconds()
+        r.duration_str = _format_duration(r.duration_seconds)
+    rerun_stats = {
+        "total": total_reruns,
+        "completed": completed_reruns,
+        "active": active_reruns,
+        "distinct_tasks": distinct_tasks,
+        "distinct_systems": distinct_systems,
+        "avg_duration": _format_duration(avg_duration),
+        "max_duration": _format_duration(max_duration),
+    }
 
     audit_logs = AuditLog.objects.all()[:50]
 
@@ -627,11 +1062,15 @@ def dashboard(request):
         "completed": completed,
         "pending": pending,
         "overdue": overdue,
+        "finished_late_count": finished_late_count,
+        "on_time_count": on_time_count,
         "completion_rate": completion_rate,
         "month": month,
         "months": list(range(1, 13)),
         "audit_logs": audit_logs,
         "months_data": months_data,
+        "rerun_stats": rerun_stats,
+        "rerun_entries": rerun_entries,
     })
 
 
@@ -653,7 +1092,10 @@ def generate_next_month(request):
     templates = TaskTemplate.objects.all()
     if templates.exists():
         for tmpl in templates:
-            scheduled = calculate_scheduled_date(next_month, tmpl.sla_days, tmpl.sla_type)
+            if tmpl.sla_days is not None:
+                scheduled = calculate_scheduled_date(next_month, tmpl.sla_days, tmpl.sla_type)
+            else:
+                scheduled = None
             Task.objects.create(
                 task_name=tmpl.task_name,
                 assigned_to=tmpl.assigned_to,
@@ -666,7 +1108,10 @@ def generate_next_month(request):
     else:
         last_month_tasks = Task.objects.filter(month=current_month)
         for t in last_month_tasks:
-            scheduled = calculate_scheduled_date(next_month, t.sla_days, t.sla_type)
+            if t.sla_days is not None:
+                scheduled = calculate_scheduled_date(next_month, t.sla_days, t.sla_type)
+            else:
+                scheduled = None
             Task.objects.create(
                 task_name=t.task_name,
                 assigned_to=t.assigned_to,
@@ -706,7 +1151,7 @@ def export_csv(request):
     writer = csv.writer(response)
     writer.writerow(["Task Name", "Assigned To", "SLA Days", "SLA Type", "Scheduled Date", "Finished", "Completion Date", "Comments"])
     for t in tasks:
-        writer.writerow([t.task_name, t.assigned_to, t.sla_days, t.sla_type, t.scheduled_date, t.finished, t.completion_date or "", t.comments])
+        writer.writerow([t.task_name, t.assigned_to, t.sla_days or "", t.sla_type, t.scheduled_date or "", t.finished, t.completion_date or "", t.comments])
     return response
 
 
@@ -734,7 +1179,7 @@ def template_list(request):
     return render(
         request,
         "tracker/template_list.html",
-        {"templates": templates, "groups": groups},
+        {"templates": templates, "groups": groups, "systems": System.objects.all()},
     )
 
 
@@ -746,6 +1191,13 @@ def _parse_int_field(value, default=None):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_optional_sla(value):
+    """Return an integer SLA, or None for a deliberately blank SLA field."""
+    if value is None or not str(value).strip():
+        return None
+    return int(value)
 
 
 def _assign_template_sort_order(requested_order, exclude_id=None):
@@ -787,7 +1239,7 @@ def template_add(request):
         TaskTemplate.objects.create(
             task_name=request.POST["task_name"],
             assigned_to=request.POST["assigned_to"],
-            sla_days=int(request.POST["sla_days"]),
+            sla_days=_parse_optional_sla(request.POST.get("sla_days")),
             sla_type=request.POST["sla_type"],
             sort_order=actual,
             group_id=_parse_group_id(request.POST.get("group")),
@@ -811,7 +1263,7 @@ def template_edit(request, template_id):
     if request.method == "POST":
         tmpl.task_name = request.POST["task_name"]
         tmpl.assigned_to = request.POST["assigned_to"]
-        tmpl.sla_days = int(request.POST["sla_days"])
+        tmpl.sla_days = _parse_optional_sla(request.POST.get("sla_days"))
         tmpl.sla_type = request.POST["sla_type"]
         requested = _parse_int_field(request.POST.get("sort_order"))
         actual, shifted = _assign_template_sort_order(requested, exclude_id=tmpl.id)
@@ -849,7 +1301,8 @@ def _apply_template_updates(tmpl, payload):
     }
     tmpl.task_name = payload.get("task_name", tmpl.task_name)
     tmpl.assigned_to = payload.get("assigned_to", tmpl.assigned_to)
-    tmpl.sla_days = int(payload.get("sla_days", tmpl.sla_days))
+    if "sla_days" in payload:
+        tmpl.sla_days = _parse_optional_sla(payload.get("sla_days"))
     tmpl.sla_type = payload.get("sla_type", tmpl.sla_type)
     requested = _parse_int_field(
         payload.get("sort_order"), default=tmpl.sort_order
@@ -942,6 +1395,48 @@ def template_delete(request, template_id):
 
 
 # --- Group management ---
+
+# System rerun choices are maintained on the Templates tab so task rerun
+# dropdowns always draw from values users have explicitly provided.
+@require_POST
+def system_add(request):
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        messages.error(request, "System name is required.")
+        return redirect("template_list")
+    if System.objects.filter(name__iexact=name).exists():
+        messages.error(request, f"A system named '{name}' already exists.")
+        return redirect("template_list")
+    current_max = System.objects.aggregate(m=Max("sort_order"))["m"] or 0
+    system = System.objects.create(name=name, sort_order=current_max + 1)
+    messages.success(request, f"System '{system.name}' added. It is now available for rerun logging.")
+    return redirect("template_list")
+
+
+@require_POST
+def system_inline_save(request, system_id):
+    system = get_object_or_404(System, id=system_id)
+    name = (request.POST.get("name") or "").strip()
+    if not name:
+        return JsonResponse({"ok": False, "error": "System name is required."}, status=400)
+    if System.objects.filter(name__iexact=name).exclude(id=system.id).exists():
+        return JsonResponse({"ok": False, "error": "A system with that name already exists."}, status=400)
+    system.name = name
+    system.save(update_fields=["name"])
+    return JsonResponse({"ok": True, "name": system.name})
+
+
+@require_POST
+def system_delete(request, system_id):
+    system = get_object_or_404(System, id=system_id)
+    name = system.name
+    try:
+        system.delete()
+    except ProtectedError:
+        messages.error(request, f"System '{name}' cannot be deleted because rerun history uses it.")
+    else:
+        messages.success(request, f"System '{name}' deleted.")
+    return redirect("template_list")
 
 def _parse_group_id(value):
     """Return int(value), or None if blank/missing/non-numeric."""
@@ -1077,7 +1572,7 @@ _BULK_HEADER_ALIASES = {
     "groupname": "group",
     "group_name": "group",
 }
-_BULK_REQUIRED = {"task_name", "assigned_to", "sla_days", "sla_type"}
+_BULK_REQUIRED = {"task_name", "assigned_to", "sla_type"}
 _BULK_SLA_TYPES = {choice for choice, _ in TaskTemplate.SLAType.choices}
 
 
@@ -1151,9 +1646,9 @@ def _parse_bulk_csv(csv_text: str) -> tuple[list[str], list[dict], list[str]]:
             )
             continue
         try:
-            record["sla_days"] = int(record["sla_days"])
+            record["sla_days"] = _parse_optional_sla(record.get("sla_days"))
         except ValueError:
-            warnings.append(f"Row {line_no}: SLA Days must be an integer, got '{record['sla_days']}' — skipped.")
+            warnings.append(f"Row {line_no}: SLA Days must be an integer when supplied, got '{record.get('sla_days', '')}' — skipped.")
             continue
         sort_order_raw = record.get("sort_order", "")
         if sort_order_raw == "":

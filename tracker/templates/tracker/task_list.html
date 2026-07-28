@@ -1,8 +1,10 @@
 {% extends 'tracker/base.html' %}
 {% block content %}
 
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h3>Tasks for {{ month|date:"F Y" }}</h3>
+<div id="task-summary" class="task-summary-sticky mb-4">
+    <div class="task-summary-title">
+        <h3 class="mb-0">Tasks for {{ month|date:"F Y" }}</h3>
+    </div>
     <form method="post" action="{% url 'set_month' %}" class="row g-2 align-items-center">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ request.path }}">
@@ -26,26 +28,31 @@
             <button type="submit" class="btn btn-sm btn-primary">Go</button>
         </div>
     </form>
-</div>
-
-<div class="row g-3 mb-4">
-    <div class="col-md-4">
+    <div class="task-summary-stats">
+    <div>
         <div class="stat-card glass-success">
             <p class="stat-number">{{ completed_count }}</p>
             <p class="stat-label">Completed</p>
         </div>
     </div>
-    <div class="col-md-4">
+    <div>
+        <div class="stat-card glass-finished-late">
+            <p class="stat-number">{{ finished_late_count }}</p>
+            <p class="stat-label">Finished Late</p>
+        </div>
+    </div>
+    <div>
         <div class="stat-card glass-warning">
             <p class="stat-number">{{ pending_count }}</p>
             <p class="stat-label">In Progress</p>
         </div>
     </div>
-    <div class="col-md-4">
+    <div>
         <div class="stat-card glass-danger">
             <p class="stat-number">{{ overdue_count }}</p>
             <p class="stat-label">Overdue</p>
         </div>
+    </div>
     </div>
 </div>
 
@@ -59,7 +66,6 @@
     <a href="{% url 'export_html' %}" class="btn btn-sm btn-outline-secondary px-3">Export HTML Report</a>
 </div>
 
-{% if tasks %}
 <div class="glass-card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Gantt Chart</span>
@@ -82,6 +88,17 @@
                 {% if today_pct is not None %}
                 <div class="today-line" style="left: calc(200px + (100% - 200px) * {{ today_pct }} / 100);"></div>
                 {% endif %}
+                <details class="gantt-group-block" data-group-id="rerun" open>
+                    <summary class="gantt-row gantt-group-summary">
+                        <div class="gantt-label"><span class="gantt-group-chevron"></span><strong>System rerun</strong><span class="badge bg-secondary ms-1">{{ rerun_gantt_total }} rerun(s)</span></div>
+                        <div class="gantt-track" style="min-height:{{ rerun_gantt_entries.collapsed_track_height }}px;">
+                            {% for entry in rerun_gantt_entries.collapsed_bars %}<div class="gantt-bar rerun-bar {% if entry.is_active %}active{% endif %}" style="left:{{ entry.left_pct }}%;width:{{ entry.width_pct }}%;top:{{ entry.top_px }}px;" title="{{ entry.system_name }} — {{ entry.task_name }} — Triggered: {{ entry.trigger_date }}"></div>{% endfor %}
+                        </div>
+                    </summary>
+                    {% for system_data in rerun_gantt_entries.expanded_systems %}
+                    <div class="gantt-row"><div class="gantt-label">{{ system_data.system_name }}</div><div class="gantt-track" style="min-height:{{ system_data.track_height }}px;">{% for bar in system_data.bars %}<div class="gantt-bar rerun-bar {% if bar.is_active %}active{% endif %}" style="left:{{ bar.left_pct }}%;width:{{ bar.width_pct }}%;top:{{ bar.top_px }}px;"></div>{% endfor %}</div></div>
+                    {% endfor %}
+                </details>
                 {% for block in group_blocks %}
                 <details class="gantt-group-block" data-group-id="{{ block.id }}" open>
                     <summary class="gantt-row gantt-group-summary status-{{ block.summary.status }}">
@@ -94,7 +111,7 @@
                             {% if block.group_bar %}
                             <div class="gantt-bar group status-{{ block.group_bar.status }}"
                                  style="left: {{ block.group_bar.start_offset }}%; width: {{ block.group_bar.width }}%;"
-                                 title="{{ block.group.name|default:'Ungrouped' }} — {{ block.summary.overdue }} overdue, {{ block.summary.pending }} in progress, {{ block.summary.completed }} completed">
+                                 title="{{ block.group.name|default:'Ungrouped' }} — {{ block.summary.overdue }} overdue, {{ block.summary.pending }} in progress, {{ block.summary.completed }} completed ({{ block.summary.on_time }} on time, {{ block.summary.finished_late }} finished late)">
                                 <span class="gantt-bar-label">
                                     {% if block.summary.overdue %}
                                     <span class="gantt-bar-count gantt-bar-count-overdue">
@@ -111,6 +128,11 @@
                                         <strong>{{ block.summary.completed }}</strong> completed
                                     </span>
                                     {% endif %}
+                                    {% if block.summary.finished_late %}
+                                    <span class="gantt-bar-count gantt-bar-count-finished-late">
+                                        <strong>{{ block.summary.finished_late }}</strong> finished late
+                                    </span>
+                                    {% endif %}
                                 </span>
                             </div>
                             {% endif %}
@@ -120,9 +142,9 @@
                     <div class="gantt-row" data-task-id="{{ gt.task.id }}">
                         <div class="gantt-label" title="{{ gt.task.task_name }} ({{ gt.task.scheduled_date }})">{{ gt.task.task_name }}</div>
                         <div class="gantt-track">
-                            <div class="gantt-bar {% if gt.task.finished %}completed{% elif gt.task.scheduled_date < today %}overdue{% endif %}"
+                            <div class="gantt-bar {{ gt.status }}"
                                  style="left: {{ gt.start_offset }}%; width: {{ gt.duration }}%;"
-                                 title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }}"></div>
+                                 title="{{ gt.task.task_name }} - Due: {{ gt.task.scheduled_date }} - {{ gt.status }}"></div>
                         </div>
                     </div>
                     {% endfor %}
@@ -132,7 +154,6 @@
         </div>
     </div>
 </div>
-{% endif %}
 
 <div class="glass-card">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -151,32 +172,42 @@
             <thead>
                 <tr>
                     <th style="width:40px;">Done</th>
-                    <th style="width:25%;">Task Name</th>
-                    <th style="width:12%;">Assigned To</th>
+                    <th class="task-name-column">Task Name</th>
+                    <th class="assigned-to-column">Assigned To</th>
                     <th style="width:90px;">SLA</th>
                     <th style="width:120px;">Scheduled</th>
-                    <th style="width:140px;">Completed At</th>
-                    <th>Comments</th>
+                    <th class="completed-at-column">Completed At</th>
+                    <th class="comments-column">Comments</th>
                     <th style="width:120px;">Group</th>
+                    <th style="width:130px;">Rerun System</th>
+                    <th style="width:180px;">Rerun Time</th>
+                    <th style="width:205px;">Rerun Finished</th>
                     <th style="width:220px;"></th>
                 </tr>
             </thead>
             <tbody>
                 {% for block in group_blocks %}
                 <tr class="group-summary-row table-group-summary status-{{ block.summary.status }}" data-group-id="{{ block.id }}">
-                    <td colspan="9">
+                    <td colspan="12">
                         <span class="gantt-group-chevron"></span>
                         <strong>{{ block.group.name|default:"Ungrouped" }}</strong>
                         <span class="group-summary-counts ms-2">
                             {% if block.summary.overdue %}<span class="gantt-bar-count gantt-bar-count-overdue"><strong>{{ block.summary.overdue }}</strong> overdue</span>{% endif %}
                             {% if block.summary.pending %}<span class="gantt-bar-count gantt-bar-count-pending"><strong>{{ block.summary.pending }}</strong> in progress</span>{% endif %}
-                            {% if block.summary.completed %}<span class="gantt-bar-count gantt-bar-count-completed"><strong>{{ block.summary.completed }}</strong> completed</span>{% endif %}
+                            {% if block.summary.completed %}
+                            <span class="gantt-bar-count gantt-bar-count-completed"><strong>{{ block.summary.completed }}</strong>
+                                {% if block.summary.finished_late or block.summary.on_time %}
+                                completed ({{ block.summary.on_time }} on time, {{ block.summary.finished_late }} finished late)
+                                {% else %}
+                                completed
+                                {% endif %}
+                            </span>{% endif %}
                         </span>
                     </td>
                 </tr>
                 {% for task in block.tasks %}
                 {% with st=task.sla_type %}
-                <tr id="task-row-{{ task.id }}" data-group-id="{{ block.id }}" data-group-row data-scheduled-date="{{ task.scheduled_date|date:'Y-m-d' }}" class="{% if task.finished %}row-completed{% elif task.scheduled_date < today %}row-overdue{% else %}row-pending{% endif %}">
+                <tr id="task-row-{{ task.id }}" data-group-id="{{ block.id }}" data-group-row data-scheduled-date="{{ task.scheduled_date|date:'Y-m-d'|default:'' }}" data-status="{{ task.computed_status }}" class="row-{{ task.computed_status }}">
                     <td>
                         <input type="checkbox" class="form-check-input toggle-finished" data-task-id="{{ task.id }}" {% if task.finished %}checked{% endif %}>
                     </td>
@@ -189,18 +220,18 @@
                         <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ task.assigned_to }}" style="display:none;">
                     </td>
                     <td>
-                        <span class="view-mode">{% if st == "Working Day" or st == "Business Day" %}WD{% else %}CD{% endif %} {{ task.sla_days }}</span>
+                        <span class="view-mode">{% if task.sla_days is not None %}{% if st == "Working Day" or st == "Business Day" %}WD{% else %}CD{% endif %} {{ task.sla_days }}{% else %}<span class="text-muted">No SLA</span>{% endif %}</span>
                         <span class="edit-mode" style="display:none;">
                             <select class="form-select form-select-sm edit-sla-type" style="width:auto;display:inline-block;">
                                 <option value="Working Day" {% if st == "Working Day" or st == "Business Day" %}selected{% endif %}>Working Day</option>
                                 <option value="Calendar Day" {% if st == "Calendar Day" %}selected{% endif %}>Calendar Day</option>
                             </select>
-                            <input type="number" class="form-control form-control-sm edit-sla-days" value="{{ task.sla_days }}" min="0" style="width:60px;display:inline-block;">
+                            <input type="number" class="form-control form-control-sm edit-sla-days" value="{{ task.sla_days|default:'' }}" min="0" style="width:60px;display:inline-block;">
                         </span>
                     </td>
                     <td>
-                        <span class="view-mode">{{ task.scheduled_date|date:"Y-m-d" }}</span>
-                        <span class="edit-mode" style="display:none;">{{ task.scheduled_date|date:"Y-m-d" }}</span>
+                        <span class="view-mode">{% if task.scheduled_date %}{{ task.scheduled_date|date:"Y-m-d" }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
+                        <span class="edit-mode" style="display:none;">{% if task.scheduled_date %}{{ task.scheduled_date|date:"Y-m-d" }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
                     </td>
                     <td>
                         <span class="view-mode">{% if task.completion_date %}{{ task.completion_date|date:"Y-m-d" }}{% if task.completion_time %} {{ task.completion_time|time:"H:i" }}{% endif %}{% else %}-{% endif %}</span>
@@ -209,8 +240,8 @@
                                style="display:none;">
                     </td>
                     <td class="comment-cell" data-task-id="{{ task.id }}">
-                        <span class="view-mode comment-display" title="Click to edit">{% if task.comments %}{{ task.comments|truncatechars:20 }}{% else %}<span class="text-muted">(click to add)</span>{% endif %}</span>
-                        <input type="text" class="edit-mode form-control form-control-sm edit-comments comment-input" value="{{ task.comments }}" style="display:none;">
+                        <span class="view-mode comment-display" title="Click to edit">{% if task.comments %}{{ task.comments|truncatechars:20 }}{% else %}<span class="text-muted comment-placeholder">(click to add)</span>{% endif %}</span>
+                        <textarea class="edit-mode form-control form-control-sm edit-comments comment-textarea comment-input" rows="2" style="display:none;">{{ task.comments }}</textarea>
                     </td>
                     <td>
                         <span class="view-mode">{% if task.group %}{{ task.group.name }}{% else %}<span class="text-muted">—</span>{% endif %}</span>
@@ -221,10 +252,13 @@
                             {% endfor %}
                         </select>
                     </td>
+                    <td class="rerun-system-cell" data-task-id="{{ task.id }}">{% for rr in task.computed_reruns %}<div class="rerun-field"><span class="view-mode rerun-display">{{ rr.system.name }}</span><select class="edit-mode form-select form-select-sm rerun-system" data-rerun-id="{{ rr.id }}" style="display:none;">{% for sys in systems %}<option value="{{ sys.id }}" {% if rr.system_id == sys.id %}selected{% endif %}>{{ sys.name }}</option>{% endfor %}</select></div>{% empty %}<span class="rerun-hint" data-task-id="{{ task.id }}">(click to add rerun)</span>{% endfor %}</td>
+                    <td class="rerun-triggered-cell" data-task-id="{{ task.id }}">{% for rr in task.computed_reruns %}<div class="rerun-field"><span class="view-mode rerun-display">{{ rr.triggered_at|date:"Y-m-d H:i" }}</span><input type="datetime-local" class="edit-mode form-control form-control-sm rerun-triggered" data-rerun-id="{{ rr.id }}" value="{{ rr.triggered_at|date:'Y-m-d\\TH:i' }}" style="display:none;"></div>{% endfor %}</td>
+                    <td class="rerun-completed-cell" data-task-id="{{ task.id }}">{% for rr in task.computed_reruns %}<div class="rerun-field"><span class="view-mode rerun-display">{% if rr.completed_at %}{{ rr.completed_at|date:"Y-m-d H:i" }}{% else %}Active{% endif %}</span><input type="datetime-local" class="edit-mode form-control form-control-sm rerun-completed" data-rerun-id="{{ rr.id }}" value="{% if rr.completed_at %}{{ rr.completed_at|date:'Y-m-d\\TH:i' }}{% endif %}" style="display:none;"><button type="button" class="btn btn-sm btn-outline-danger edit-mode rerun-delete-btn" data-rerun-id="{{ rr.id }}" style="display:none;" title="Delete rerun">Del</button></div>{% endfor %}{% if task.computed_reruns %}<button type="button" class="btn btn-sm btn-success view-mode rerun-add-icon" data-task-id="{{ task.id }}" title="Add another rerun">+</button>{% endif %}<span class="rerun-feedback small"></span></td>
                     <td class="actions-cell" style="white-space:nowrap;">
                         <button class="btn btn-sm btn-outline-secondary edit-btn view-mode" data-task-id="{{ task.id }}">Edit</button>
                         <span class="edit-buttons edit-mode" style="display:none;">
-                            <button class="btn btn-sm btn-primary save-btn" data-task-id="{{ task.id }}">Save</button>
+                            <button class="btn btn-sm btn-outline-secondary cancel-edit-btn" data-task-id="{{ task.id }}">Cancel</button>
                             <span class="delete-confirm" style="display:none;">
                                 <button class="btn btn-sm btn-outline-secondary cancel-delete" data-task-id="{{ task.id }}">No</button>
                                 <form method="post" action="{% url 'task_delete' task.id %}" style="display:inline;">
@@ -233,6 +267,7 @@
                                 </form>
                             </span>
                             <button class="btn btn-sm btn-outline-danger delete-btn" data-task-id="{{ task.id }}">Del</button>
+                            <button class="btn btn-sm btn-primary save-btn" data-task-id="{{ task.id }}">Save</button>
                         </span>
                     </td>
                 </tr>
@@ -244,8 +279,29 @@
     </div>
 </div>
 
-<div class="glass-card mt-4">
-    <div class="card-header">Quick Add Task</div>
+{% if comment_tasks %}
+<div class="glass-card mt-4" id="comments-card">
+    <div class="card-header">Comments</div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0" id="comments-table">
+            <thead>
+                <tr><th style="width:30%;">Task Name</th><th>Comment</th></tr>
+            </thead>
+            <tbody>
+                {% for ct in comment_tasks %}
+                <tr data-task-id="{{ ct.id }}">
+                    <td>{{ ct.task_name }}</td>
+                    <td class="comment-display-text">{{ ct.comments }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="glass-card mt-4 ad-hoc-task-card">
+    <div class="card-header">Add ad-hoc task (one-off)</div>
     <div class="card-body">
         <form method="post" action="{% url 'task_add' %}" class="row g-2">
             {% csrf_token %}
@@ -256,7 +312,7 @@
                 <input type="text" name="assigned_to" class="form-control form-control-sm" placeholder="Assigned to" required>
             </div>
             <div class="col-md-1">
-                <input type="number" name="sla_days" class="form-control form-control-sm" placeholder="SLA" min="0" required>
+                <input type="number" name="sla_days" class="form-control form-control-sm" placeholder="SLA" min="0">
             </div>
             <div class="col-md-2">
                 <select name="sla_type" class="form-select form-select-sm">
@@ -281,6 +337,12 @@
         </form>
     </div>
 </div>
+
+<select id="rerun-system-options" class="d-none" aria-hidden="true" tabindex="-1">
+    {% for sys in systems %}
+    <option value="{{ sys.id }}">{{ sys.name }}</option>
+    {% endfor %}
+</select>
 
 <script>
 function stepMonth(btn, delta) {
@@ -312,6 +374,35 @@ function stepMonth(btn, delta) {
     }
     const csrftoken = getCookie('csrftoken');
 
+    // Keep the full-size summary in the document.  Once it has scrolled out
+    // of view, show a separate compact copy so changing its layout cannot
+    // move the page or cause a scroll-position bounce.
+    var taskSummary = document.getElementById('task-summary');
+    if (taskSummary) {
+        var taskSummaryStart = taskSummary.getBoundingClientRect().top + window.scrollY;
+        var taskSummaryHeight = taskSummary.offsetHeight;
+        var compactTaskSummary = null;
+        function updateTaskSummaryMode() {
+            var shouldShowCompact = window.scrollY >= taskSummaryStart + taskSummaryHeight;
+            if (shouldShowCompact && !compactTaskSummary) {
+                compactTaskSummary = taskSummary.cloneNode(true);
+                compactTaskSummary.id = 'task-summary-sticky';
+                compactTaskSummary.classList.add('is-stuck');
+                document.body.appendChild(compactTaskSummary);
+            } else if (!shouldShowCompact && compactTaskSummary) {
+                compactTaskSummary.remove();
+                compactTaskSummary = null;
+            }
+        }
+        window.addEventListener('scroll', updateTaskSummaryMode, {passive: true});
+        window.addEventListener('resize', function() {
+            taskSummaryStart = taskSummary.getBoundingClientRect().top + window.scrollY;
+            taskSummaryHeight = taskSummary.offsetHeight;
+            updateTaskSummaryMode();
+        });
+        updateTaskSummaryMode();
+    }
+
     document.querySelectorAll('.toggle-finished').forEach(function(cb) {
         cb.addEventListener('change', function() {
             var cb = this;
@@ -323,70 +414,51 @@ function stepMonth(btn, delta) {
                 headers: {'X-CSRFToken': csrftoken, 'X-Requested-With': 'XMLHttpRequest'},
             }).then(function(r) { return r.json(); }).then(function(data) {
                 if (!data || !data.ok) return;
-                // B9: update row + group summary client-side so the user's
-                // expand/collapse state is preserved (no location.reload).
                 updateTaskRowAfterToggle(row, data);
                 recomputeGroupSummary(groupId);
             });
         });
     });
 
-    // Row-level updates after a toggle-finished response: class for the
-    // status tint, completion date text. The browser already updated the
-    // checkbox checked state.
     function updateTaskRowAfterToggle(row, data) {
-        var finished = !!data.finished;
-        var scheduledIso = row.dataset.scheduledDate;
-        var todayIso = new Date().toISOString().slice(0, 10);
-        var newClass;
-        if (finished) {
-            newClass = 'row-completed';
-        } else if (scheduledIso < todayIso) {
-            newClass = 'row-overdue';
-        } else {
-            newClass = 'row-pending';
-        }
-        row.classList.remove('row-completed', 'row-overdue', 'row-pending');
+        var status = data.status || 'pending';
+        var newClass = 'row-' + status;
+        row.dataset.status = status;
+        row.classList.remove('row-completed', 'row-overdue', 'row-pending', 'row-finished-late');
         row.classList.add(newClass);
         var compSpan = row.querySelectorAll('td')[5].querySelector('.view-mode');
         if (compSpan) {
             compSpan.textContent = data.completion_display || '-';
         }
-        // Update the corresponding Gantt bar color.
         var taskId = row.id.replace('task-row-', '');
         var ganttRow = document.querySelector('.gantt-row[data-task-id="' + taskId + '"]');
         if (ganttRow) {
             var bar = ganttRow.querySelector('.gantt-bar');
             if (bar) {
-                bar.classList.remove('completed', 'overdue');
-                if (finished) {
-                    bar.classList.add('completed');
-                } else if (scheduledIso < todayIso) {
-                    bar.classList.add('overdue');
-                }
+                bar.classList.remove('completed', 'overdue', 'pending', 'finished-late');
+                bar.classList.add(status);
             }
         }
     }
 
-    // After a toggle, recompute the group's overdue / pending / completed
-    // counts from the DOM and reflect them in:
-    //   * the table group-summary row (status class + counts text)
-    //   * the Gantt chart group bar (status class + bar overlay text + width)
-    // Width of the group bar doesn't change on toggle (scheduled_date is
-    // untouched), so we leave the existing left/width styles intact.
     function recomputeGroupSummary(groupId) {
         var rows = document.querySelectorAll(
             '#task-table tr[data-group-row][data-group-id="' + groupId + '"]'
         );
-        var counts = { overdue: 0, pending: 0, completed: 0 };
+        var counts = { overdue: 0, pending: 0, completed: 0, finished_late: 0, on_time: 0 };
         rows.forEach(function(r) {
-            if (r.classList.contains('row-completed')) counts.completed++;
-            else if (r.classList.contains('row-overdue')) counts.overdue++;
-            else if (r.classList.contains('row-pending')) counts.pending++;
+            var s = r.dataset.status || '';
+            if (s === 'finished_late') counts.finished_late++;
+            else if (s === 'completed') counts.completed++;
+            else if (s === 'overdue') counts.overdue++;
+            else if (s === 'pending') counts.pending++;
         });
+        counts.on_time = counts.completed;
+        counts.completed = counts.completed + counts.finished_late;
         var status;
         if (counts.overdue > 0) status = 'overdue';
         else if (counts.pending > 0) status = 'pending';
+        else if (counts.finished_late > 0) status = 'finished_late';
         else status = 'completed';
 
         // --- Table group-summary row ---
@@ -502,9 +574,10 @@ function stepMonth(btn, delta) {
     // container so the markup stays in sync with the server-rendered shape
     // (gantt-bar-count-{overdue,pending,completed}, with a hidden span when
     // the count is zero).
-    var COUNT_ORDER = ['overdue', 'pending', 'completed'];
+    var COUNT_ORDER = ['overdue', 'pending', 'completed', 'finished_late'];
     var COUNT_LABELS = {
         overdue: 'overdue', pending: 'in progress', completed: 'completed',
+        finished_late: 'finished late',
     };
     function updateCountSpans(parent, counts) {
         if (!parent) return;
@@ -518,7 +591,11 @@ function stepMonth(btn, delta) {
                     span.className = 'gantt-bar-count ' + cls;
                     parent.appendChild(span);
                 }
-                span.innerHTML = '<strong>' + n + '</strong> ' + COUNT_LABELS[key];
+                if (key === 'completed' && counts.finished_late > 0) {
+                    span.innerHTML = '<strong>' + n + '</strong> completed (' + counts.on_time + ' on time, ' + counts.finished_late + ' finished late)';
+                } else {
+                    span.innerHTML = '<strong>' + n + '</strong> ' + COUNT_LABELS[key];
+                }
             } else if (span) {
                 span.parentNode.removeChild(span);
             }
@@ -552,6 +629,12 @@ function stepMonth(btn, delta) {
             row.querySelectorAll('.view-mode').forEach(function(el) { el.style.display = 'none'; });
             row.querySelectorAll('.edit-mode').forEach(function(el) { el.style.display = ''; });
             document.getElementById('editModeLabel').style.display = 'inline';
+        });
+    });
+
+    document.querySelectorAll('.cancel-edit-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            exitEditMode();
         });
     });
 
@@ -597,9 +680,8 @@ function stepMonth(btn, delta) {
         });
     });
 
-    // --- Quick comment edit: click cell to edit, Enter/blur to save, Esc to cancel ---
+    // --- Comment edit with textarea: Enter inserts newline, save on blur, Esc to cancel ---
     function isRowInFullEdit(row) {
-        // The Edit button uses .view-mode; if any .view-mode in the row is hidden, full-edit is active.
         var btn = row.querySelector('.edit-btn');
         return !btn || btn.style.display === 'none';
     }
@@ -612,7 +694,6 @@ function stepMonth(btn, delta) {
         input.style.display = '';
         input.dataset.prev = input.value;
         input.focus();
-        input.select();
     }
 
     function cancelCommentEdit(cell) {
@@ -628,7 +709,6 @@ function stepMonth(btn, delta) {
         var display = cell.querySelector('.comment-display');
         var taskId = cell.dataset.taskId;
         var value = input.value;
-        // Nothing changed: just exit edit mode.
         if (value === (input.dataset.prev || '')) {
             input.style.display = 'none';
             display.style.display = '';
@@ -643,29 +723,49 @@ function stepMonth(btn, delta) {
         }).then(function(r) { return r.json(); }).then(function(data) {
             if (data && data.ok) {
                 input.dataset.prev = data.comments;
-                // Re-render display: use server text, falling back to placeholder when empty.
-                display.innerHTML = data.comments
-                    ? (data.comments.length > 20 ? data.comments.slice(0, 20) + '…' : data.comments)
-                    : '<span class="text-muted">(click to add)</span>';
+                var isEmpty = !data.comments;
+                display.textContent = isEmpty ? '' : data.comments;
+                if (isEmpty) {
+                    var ph = display.querySelector('.comment-placeholder');
+                    if (!ph) {
+                        ph = document.createElement('span');
+                        ph.className = 'text-muted comment-placeholder';
+                        display.appendChild(ph);
+                    }
+                    ph.textContent = '(click to add)';
+                } else {
+                    var ph = display.querySelector('.comment-placeholder');
+                    if (ph) ph.remove();
+                }
                 input.style.display = 'none';
                 display.style.display = '';
+                // Sync the comments table (Item 7)
+                syncCommentsTable(taskId, data.comments);
             } else {
-                cancelCommentEdit(cell);
+                input.style.display = '';
+                display.style.display = 'none';
             }
-        }).catch(function() { cancelCommentEdit(cell); });
+        }).catch(function() {
+            input.style.display = '';
+            display.style.display = 'none';
+        });
     }
 
     document.querySelectorAll('.comment-cell').forEach(function(cell) {
         cell.addEventListener('click', function(e) {
-            // Ignore clicks while the input is already visible (don't re-trigger from internal clicks).
             var input = cell.querySelector('.comment-input');
             if (input.style.display !== 'none') return;
             enterCommentEdit(cell);
         });
         var input = cell.querySelector('.comment-input');
         input.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-            else if (e.key === 'Escape') { e.preventDefault(); cancelCommentEdit(cell); }
+            if (e.key === 'Enter') {
+                // Enter inserts newline in textarea; do nothing special.
+                return;
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelCommentEdit(cell);
+            }
         });
         input.addEventListener('blur', function() { saveCommentEdit(cell); });
     });
@@ -741,6 +841,168 @@ function stepMonth(btn, delta) {
                 setTableGroupExpanded(s.dataset.groupId, false);
             });
         });
+    });
+
+    // --- Comments table sync after blur-save (Item 7) ---
+    function syncCommentsTable(taskId, commentText) {
+        var table = document.getElementById('comments-table');
+        var isEmpty = !commentText || !commentText.trim();
+        var taskRow = document.getElementById('task-row-' + taskId);
+        var taskName = taskRow ? taskRow.querySelector('.edit-name').value || taskRow.querySelector('td:nth-child(2)').textContent.trim() : '';
+
+        if (!table && !isEmpty) {
+            // Create the comments table card from scratch
+            var taskListCard = document.querySelector('.glass-card:has(#task-table)');
+            if (!taskListCard) return;
+            var container = document.createElement('div');
+            container.className = 'glass-card mt-4';
+            container.id = 'comments-card';
+            container.innerHTML =
+                '<div class="card-header">Comments</div>' +
+                '<div class="card-body p-0">' +
+                '<table class="table table-sm mb-0" id="comments-table">' +
+                '<thead><tr><th style="width:30%;">Task Name</th><th>Comment</th></tr></thead>' +
+                '<tbody></tbody></table></div>';
+            taskListCard.parentNode.insertBefore(container, taskListCard.nextSibling);
+            table = document.getElementById('comments-table');
+        }
+
+        if (isEmpty) {
+            // Remove this task's row from the comments table
+            if (table) {
+                var row = table.querySelector('tr[data-task-id="' + taskId + '"]');
+                if (row) row.remove();
+                // If no rows left, remove the whole comments card
+                if (table.querySelectorAll('tbody tr').length === 0) {
+                    var card = document.getElementById('comments-card');
+                    if (card) card.remove();
+                }
+            }
+            return;
+        }
+
+        if (!table) return;
+        var tbody = table.querySelector('tbody');
+        var existingRow = tbody.querySelector('tr[data-task-id="' + taskId + '"]');
+        if (existingRow) {
+            existingRow.querySelector('td:last-child').textContent = commentText;
+        } else {
+            var newRow = document.createElement('tr');
+            newRow.dataset.taskId = taskId;
+            var nameCell = document.createElement('td');
+            nameCell.textContent = taskName;
+            var commentCell = document.createElement('td');
+            commentCell.className = 'comment-display-text';
+            commentCell.textContent = commentText;
+            newRow.appendChild(nameCell);
+            newRow.appendChild(commentCell);
+            tbody.appendChild(newRow);
+        }
+    }
+
+    // --- System rerun toggle in view mode ---
+    document.querySelectorAll('.rerun-toggle').forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var editor = this.closest('td').querySelector('.rerun-editor');
+            if (this.checked) {
+                editor.style.display = '';
+                // If no rows exist, trigger add
+                if (editor.querySelectorAll('.rerun-row[data-rerun-id]').length === 0) {
+                    var addBtn = editor.querySelector('.rerun-add-btn');
+                    if (addBtn) addBtn.click();
+                }
+            } else {
+                // Only hide unsaved new rows, never delete saved ones
+                editor.querySelectorAll('.rerun-row[data-rerun-id="new"]').forEach(function(r) { r.remove(); });
+                editor.style.display = 'none';
+            }
+        });
+    });
+
+    // --- System reruns: three aligned task-list columns, with multiple entries per task. ---
+    function field(taskId, kind, rerunId) {
+        return document.querySelector('.rerun-' + kind + '-cell[data-task-id="' + taskId + '"] [data-rerun-id="' + rerunId + '"]');
+    }
+    function saveExistingRerun(taskId, rerunId) {
+        var system = field(taskId, 'system', rerunId), triggered = field(taskId, 'triggered', rerunId), completed = field(taskId, 'completed', rerunId);
+        if (!system || !triggered || !completed || !triggered.value) return;
+        var data = new URLSearchParams({system: system.value, triggered_at: triggered.value, completed_at: completed.value || ''});
+        fetch('/reruns/' + rerunId + '/update/', {method:'POST', headers:{'X-CSRFToken':csrftoken,'X-Requested-With':'XMLHttpRequest'}, body:data})
+            .then(function(r){ return r.json(); }).then(function(result){ if (!result.ok) alert(result.error || 'Rerun save failed'); });
+    }
+    document.querySelectorAll('.rerun-system, .rerun-triggered, .rerun-completed').forEach(function(input) {
+        input.addEventListener('change', function() {
+            var taskId = this.closest('td').dataset.taskId;
+            saveExistingRerun(taskId, this.dataset.rerunId);
+        });
+    });
+    document.querySelectorAll('.rerun-delete-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            if (!confirm('Delete this rerun?')) return;
+            fetch('/reruns/' + btn.dataset.rerunId + '/delete/', {method:'POST', headers:{'X-CSRFToken':csrftoken,'X-Requested-With':'XMLHttpRequest'}})
+                .then(function(r){return r.json();}).then(function(result){ if (result.ok) location.reload(); else alert(result.error || 'Delete failed'); });
+        });
+    });
+    document.querySelectorAll('.rerun-add-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var taskId = btn.dataset.taskId, key = 'new-' + Date.now(), options = '';
+            document.querySelectorAll('#rerun-system-options option').forEach(function(opt, index) { options += '<option value="' + opt.value + '"' + (index ? '' : ' selected') + '>' + opt.textContent + '</option>'; });
+            var systemCell = document.querySelector('.rerun-system-cell[data-task-id="' + taskId + '"]');
+            var timeCell = document.querySelector('.rerun-triggered-cell[data-task-id="' + taskId + '"]');
+            var doneCell = document.querySelector('.rerun-completed-cell[data-task-id="' + taskId + '"]');
+            systemCell.insertAdjacentHTML('beforeend', '<div class="rerun-field"><select class="form-select form-select-sm rerun-system" data-rerun-id="' + key + '">' + options + '</select></div>');
+            timeCell.insertAdjacentHTML('beforeend', '<div class="rerun-field"><input type="datetime-local" class="form-control form-control-sm rerun-triggered" data-rerun-id="' + key + '"></div>');
+            doneCell.insertAdjacentHTML('beforeend', '<div class="rerun-field"><input type="datetime-local" class="form-control form-control-sm rerun-completed" data-rerun-id="' + key + '"><button type="button" class="btn btn-sm btn-primary rerun-save-new-btn" data-rerun-id="' + key + '">Save</button></div>');
+            var save = field(taskId, 'completed', key).parentElement.querySelector('.rerun-save-new-btn');
+            save.addEventListener('click', function() {
+                var system = field(taskId, 'system', key), triggered = field(taskId, 'triggered', key), completed = field(taskId, 'completed', key);
+                if (!triggered.value) { alert('Rerun Time is required.'); return; }
+                var data = new URLSearchParams({system:system.value, triggered_at:triggered.value, completed_at:completed.value || ''});
+                fetch('/task/' + taskId + '/reruns/create/', {method:'POST',headers:{'X-CSRFToken':csrftoken,'X-Requested-With':'XMLHttpRequest'},body:data})
+                    .then(function(r){return r.json();}).then(function(result){ if(result.ok) location.reload(); else alert(result.error || 'Save failed'); });
+            });
+        });
+    });
+
+    function openNewRerun(taskId) {
+        var key = 'new-' + Date.now(), options = '';
+        document.querySelectorAll('#rerun-system-options option').forEach(function(opt, index) {
+            options += '<option value="' + opt.value + '"' + (index ? '' : ' selected') + '>' + opt.textContent + '</option>';
+        });
+        if (!options) { alert('Add a rerun system on the Templates tab first.'); return; }
+        var systemCell = document.querySelector('.rerun-system-cell[data-task-id="' + taskId + '"]');
+        var timeCell = document.querySelector('.rerun-triggered-cell[data-task-id="' + taskId + '"]');
+        var doneCell = document.querySelector('.rerun-completed-cell[data-task-id="' + taskId + '"]');
+        var hint = systemCell.querySelector('.rerun-hint');
+        if (hint) hint.remove();
+        systemCell.insertAdjacentHTML('beforeend', '<div class="rerun-field rerun-new"><select class="form-select form-select-sm rerun-system" data-rerun-id="' + key + '">' + options + '</select></div>');
+        timeCell.insertAdjacentHTML('beforeend', '<div class="rerun-field rerun-new"><input type="datetime-local" class="form-control form-control-sm rerun-triggered" data-rerun-id="' + key + '"></div>');
+        doneCell.insertAdjacentHTML('beforeend', '<div class="rerun-field rerun-new"><input type="datetime-local" class="form-control form-control-sm rerun-completed" data-rerun-id="' + key + '"><button type="button" class="btn btn-sm btn-success rerun-save-new-btn" title="Save rerun">✓</button><button type="button" class="btn btn-sm btn-outline-danger rerun-cancel-new-btn" title="Cancel adding rerun">×</button></div>');
+        var newDoneField = doneCell.querySelector('.rerun-field:last-child');
+        newDoneField.querySelector('.rerun-save-new-btn').addEventListener('click', function() {
+            var system = field(taskId, 'system', key), triggered = field(taskId, 'triggered', key), completed = field(taskId, 'completed', key);
+            if (!triggered.value) { alert('Rerun Time is required.'); return; }
+            var data = new URLSearchParams({system:system.value, triggered_at:triggered.value, completed_at:completed.value || ''});
+            fetch('/task/' + taskId + '/reruns/create/', {method:'POST',headers:{'X-CSRFToken':csrftoken,'X-Requested-With':'XMLHttpRequest'},body:data})
+                .then(function(r){return r.json();}).then(function(result){ if(result.ok) location.reload(); else alert(result.error || 'Save failed'); });
+        });
+        newDoneField.querySelector('.rerun-cancel-new-btn').addEventListener('click', function() {
+            ['system', 'triggered', 'completed'].forEach(function(kind) {
+                var input = field(taskId, kind, key);
+                if (input) input.closest('.rerun-field').remove();
+            });
+            if (!systemCell.querySelector('.rerun-field')) {
+                var restoredHint = document.createElement('span');
+                restoredHint.className = 'rerun-hint';
+                restoredHint.dataset.taskId = taskId;
+                restoredHint.textContent = '(click to add rerun)';
+                restoredHint.addEventListener('click', function() { openNewRerun(taskId); });
+                systemCell.appendChild(restoredHint);
+            }
+        });
+    }
+    document.querySelectorAll('.rerun-hint, .rerun-add-icon').forEach(function(control) {
+        control.addEventListener('click', function() { openNewRerun(this.dataset.taskId); });
     });
 
     // --- Bulk edit / Save All ---

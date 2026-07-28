@@ -11,6 +11,51 @@
     <button type="button" class="btn btn-outline-secondary btn-sm px-3" data-bs-toggle="collapse" data-bs-target="#groupsSection">
         Manage Groups
     </button>
+    <button type="button" class="btn btn-outline-secondary btn-sm px-3" data-bs-toggle="collapse" data-bs-target="#systemsSection">
+        Manage Rerun Systems
+    </button>
+</div>
+
+<div class="collapse mb-3" id="systemsSection">
+    <div class="glass-card">
+        <div class="card-header">Rerun Systems</div>
+        <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+                <thead><tr><th>System</th><th style="width:180px;">Actions</th></tr></thead>
+                <tbody>
+                    {% for system in systems %}
+                    <tr id="system-row-{{ system.id }}">
+                        <td>
+                            <span class="view-mode">{{ system.name }}</span>
+                            <input type="text" class="edit-mode form-control form-control-sm edit-system-name" value="{{ system.name }}" maxlength="120" style="display:none;">
+                        </td>
+                        <td>
+                            <button type="button" class="btn btn-sm btn-outline-secondary view-mode edit-system-btn" data-system-id="{{ system.id }}">Edit</button>
+                            <span class="edit-mode" style="display:none;">
+                                <button type="button" class="btn btn-sm btn-primary save-system-btn" data-system-id="{{ system.id }}">Save</button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary cancel-system-btn" data-system-id="{{ system.id }}">Cancel</button>
+                            </span>
+                            <form method="post" action="{% url 'system_delete' system.id %}" class="d-inline" onsubmit="return confirm('Delete system {{ system.name }}? This is blocked if rerun history uses it.')">
+                                {% csrf_token %}<button type="submit" class="btn btn-sm btn-outline-danger">Del</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="2" class="text-center text-muted py-3">No systems yet. Add one below.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card-body" style="border-top: 1px solid rgba(0,0,0,0.06);">
+            <p class="text-muted small mb-2">Systems entered here are the choices shown in each task's System rerun dropdown.</p>
+            <form method="post" action="{% url 'system_add' %}" class="row g-2 align-items-center">
+                {% csrf_token %}
+                <div class="col-auto"><label class="col-form-label small" for="system-name">New system:</label></div>
+                <div class="col-md-4"><input id="system-name" type="text" name="name" class="form-control form-control-sm" placeholder="e.g. Payment Gateway" maxlength="120" required></div>
+                <div class="col-auto"><button type="submit" class="btn btn-sm btn-primary">Add System</button></div>
+            </form>
+        </div>
+    </div>
 </div>
 
 <div class="collapse mb-3" id="groupsSection">
@@ -107,8 +152,8 @@
                         <input type="text" class="edit-mode form-control form-control-sm edit-assigned" value="{{ tmpl.assigned_to }}" style="display:none;">
                     </td>
                     <td>
-                        <span class="view-mode">{{ tmpl.sla_days }}</span>
-                        <input type="number" class="edit-mode form-control form-control-sm edit-sla-days" value="{{ tmpl.sla_days }}" min="0" style="display:none;width:80px;">
+                        <span class="view-mode">{% if tmpl.sla_days is not None %}{{ tmpl.sla_days }}{% else %}<span class="text-muted">No SLA</span>{% endif %}</span>
+                        <input type="number" class="edit-mode form-control form-control-sm edit-sla-days" value="{{ tmpl.sla_days|default:'' }}" min="0" placeholder="No SLA" style="display:none;width:80px;">
                     </td>
                     <td>
                         <span class="view-mode">{% if st == "Working Day" or st == "Business Day" %}WD{% else %}CD{% endif %}</span>
@@ -230,6 +275,38 @@
             }).then(function(r) { return r.json(); }).then(function(data) {
                 if (data.ok) location.reload();
             });
+        });
+    });
+
+    // Rerun-system inline-edit handlers mirror the group-management controls.
+    document.querySelectorAll('.edit-system-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var row = document.getElementById('system-row-' + this.dataset.systemId);
+            row.querySelectorAll('.view-mode').forEach(function(el) { el.style.display = 'none'; });
+            row.querySelectorAll('.edit-mode').forEach(function(el) { el.style.display = ''; });
+        });
+    });
+    document.querySelectorAll('.cancel-system-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var row = document.getElementById('system-row-' + this.dataset.systemId);
+            row.querySelectorAll('.edit-mode').forEach(function(el) { el.style.display = 'none'; });
+            row.querySelectorAll('.view-mode').forEach(function(el) { el.style.display = ''; });
+        });
+    });
+    document.querySelectorAll('.save-system-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var systemId = this.dataset.systemId;
+            var row = document.getElementById('system-row-' + systemId);
+            var formData = new URLSearchParams();
+            formData.append('name', row.querySelector('.edit-system-name').value);
+            fetch('/systems/' + systemId + '/inline-save/', {
+                method: 'POST',
+                headers: {'X-CSRFToken': csrftoken, 'X-Requested-With': 'XMLHttpRequest'},
+                body: formData,
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                if (data && data.ok) location.reload();
+                else alert('System save failed: ' + ((data && data.error) || 'unknown'));
+            }).catch(function() { alert('System save failed.'); });
         });
     });
 
