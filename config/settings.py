@@ -16,6 +16,26 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _load_root_config(path):
+    """Read the small KEY=VALUE configuration file stored at project root."""
+    values = {}
+    if not path.exists():
+        return values
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+ROOT_CONFIG = _load_root_config(BASE_DIR / ".config")
+APPLICATION_NAME = ROOT_CONFIG.get("APPLICATION_NAME", "Monthly Activities Tracker")
+_database_path = Path(ROOT_CONFIG.get("DATABASE_PATH", "db.sqlite3")).expanduser()
+DATABASE_PATH = _database_path if _database_path.is_absolute() else BASE_DIR / _database_path
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -62,6 +82,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'tracker.context_processors.application_name',
             ],
         },
     },
@@ -76,7 +97,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': DATABASE_PATH,
     }
 }
 
