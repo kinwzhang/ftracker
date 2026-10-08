@@ -296,6 +296,7 @@ def _build_group_block(group, tasks_in_group, today, month, pixel_per_day, total
 
 def task_list(request):
     month = _get_current_month(request)
+    title_month = (month - timedelta(days=1)).replace(day=1)
     tasks_raw = list(
         Task.objects.filter(month=month).select_related("group")
     )
@@ -423,6 +424,7 @@ def task_list(request):
             "groups": Group.objects.all(),
             "systems": System.objects.all(),
             "month": month,
+            "title_month": title_month,
             "months": list(range(1, 13)),
             "days_in_month": days_in_month,
             "group_blocks": group_blocks,

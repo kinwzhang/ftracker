@@ -490,6 +490,30 @@ class GroupReflectionTests(TestCase):
         self.assertIn(t_orphan.id, {t.id for t in ungrouped[0]["tasks"]})
 
 
+class TaskListTitleTests(TestCase):
+    def _set_session_month(self, client, month):
+        session = client.session
+        session["current_month"] = month.isoformat()
+        session.save()
+
+    def test_title_uses_previous_month(self):
+        client = Client()
+
+        self._set_session_month(client, date(2026, 9, 1))
+        response = client.get("/")
+        self.assertContains(response, "Tasks for Aug 2026 ME Run")
+
+        self._set_session_month(client, date(2026, 10, 1))
+        response = client.get("/")
+        self.assertContains(response, "Tasks for Sep 2026 ME Run")
+
+    def test_title_previous_month_crosses_year_boundary(self):
+        client = Client()
+        self._set_session_month(client, date(2026, 1, 1))
+
+        self.assertContains(client.get("/"), "Tasks for Dec 2025 ME Run")
+
+
 class BulkEditTests(TestCase):
     """E4 Round 2 — bulk-save endpoints take a JSON list of updates and
     apply them atomically. The single-row ``task_inline_save`` /

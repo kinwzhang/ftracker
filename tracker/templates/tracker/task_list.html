@@ -3,7 +3,7 @@
 
 <div id="task-summary" class="task-summary-sticky mb-4">
     <div class="task-summary-title">
-        <h3 class="mb-0">Tasks for {{ month|date:"F Y" }}</h3>
+        <h3 class="mb-0">Tasks for {{ title_month|date:"M Y" }} ME Run</h3>
     </div>
     <form method="post" action="{% url 'set_month' %}" class="row g-2 align-items-center">
         {% csrf_token %}

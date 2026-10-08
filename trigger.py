@@ -6,7 +6,7 @@ are applied) and then launches the Django development server.
 
 Usage (from the project root):
 
-    python trigger.py            # default: 127.0.0.1:8000
+    python trigger.py            # default: 127.0.0.1:45302
     python trigger.py 0.0.0.0:9000
 
 Equivalent to running `tracker/setup.py` followed by `manage.py runserver`.
@@ -39,7 +39,7 @@ def runserver(address: str) -> None:
 
 
 def main() -> int:
-    address = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:8000"
+    address = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1:45302"
 
     # Django's StatReloader re-execs ``sys.argv`` on startup so the child can
     # actually run the dev server with autoreload enabled. That second exec
